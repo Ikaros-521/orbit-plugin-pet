@@ -54,6 +54,7 @@
       model = await PIXI.live2d.Live2DModel.from(model3 || modelUrl, {
         autoInteract: true, // gaze follow + tap response on the canvas
         motionPreload: 'ALL',
+        sound: false, // motion audio cues: autoplay-blocked in a focusless pet anyway
       });
       app.stage.addChild(model);
       loaded = true;

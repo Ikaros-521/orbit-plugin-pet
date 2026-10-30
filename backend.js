@@ -123,7 +123,12 @@ module.exports = {
       return null;
     }
     function loadLive2dSettings(p) {
-      const abs = rel => `plugin://${ctx.id}/@models/${String(rel).split('/').map(encodeURIComponent).join('/')}`;
+      // asset paths in model3.json are relative to ITS OWN directory, not the model root
+      const relBase = String(p.cfg.model).split('/').slice(0, -1).concat([]).join('/');
+      const abs = rel => {
+        const joined = (relBase ? relBase + '/' : '') + String(rel).replace(/^\.\/+/, '');
+        return `plugin://${ctx.id}/@models/${joined.split('/').map(encodeURIComponent).join('/')}`;
+      };
       try {
         const raw = fs.readFileSync(path.join(prefs.modelDir, p.cfg.model), 'utf8');
         const s = extractFirstJsonObject(raw);
@@ -134,7 +139,11 @@ module.exports = {
         (fr.Expressions || []).forEach(e => { if (e.File) e.File = abs(e.File); });
         if (fr.Physics) fr.Physics = abs(fr.Physics);
         if (fr.Pose) fr.Pose = abs(fr.Pose);
-        for (const g of Object.values(fr.Motions || {})) for (const m of (Array.isArray(g) ? g : [])) if (m.File) m.File = abs(m.File);
+        for (const g of Object.values(fr.Motions || {})) for (const m of (Array.isArray(g) ? g : [])) {
+          if (m.File) m.File = abs(m.File);
+          if (m.Sound) m.Sound = abs(m.Sound); // flac cues ship next to the settings file
+        }
+        s.url = abs(p.cfg.model); // pixi-live2d-display requires the base url on settings objects
         return s;
       } catch (err) {
         console.warn('[desktop-pet] live2d settings unusable (' + p.cfg.model + '):', err.message);
@@ -490,7 +499,7 @@ module.exports = {
               ? `plugin://${ctx.id}/@models/${String(pack.cfg.model).split('/').map(encodeURIComponent).join('/')}`
               : null,
             model3: pack.engine === 'live2d' ? loadLive2dSettings(pack) : null,
-            scriptsBase: ctx.url(''),
+            scriptsBase: ctx.url('vendor'),
             prefs: prefsPayload(),
             displays: displays(),
           });

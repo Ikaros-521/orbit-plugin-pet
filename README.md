@@ -26,6 +26,18 @@
 - **设置面板**：大小（120–480px）、宠物包切换、自动溜达、气泡/语音/工作流联动/待办角标开关、回默认位
 - 空闲时自己会沿屏幕底边散步，走累了自己回 idle；跑工作流时它会打工、庆祝、难过
 
+## Live2D 宠物（可选引擎）
+
+桌宠支持第二种渲染引擎：把 **Live2D 模型**当身体挂进同一副骨架——一样的拖拽甩抛、弹弓、溜达、气泡、工作流联动，模型自带呼吸/眨眼/目光跟随。
+
+1. 准备一个本地 Live2D 模型目录（Cubism 3+ 的 `.model3.json` + moc3 + 贴图，模型授权自负，**不放本仓库**）
+2. 面板 → 宠物包 → 选 `伊卡洛斯（天使）`，在「模型目录」行点 **绑定…** 指向模型根目录
+3. 完成——WebGL 渲染进原来的透明置顶窗，一切交互照旧
+
+引擎差异都收在映射层：`pets/ikaros-angel/pet.json` 的 `live2d.motions` 把语义名（idle/click/walk/working/celebrate/error…）映射到模型的动效组或表情；缺项自动回落。模型 settings 由后端清洗（部分导出器在 model3.json 尾部追加 `//` 注释会卡死官方解析器，清洗器提取首个 JSON 对象并把 moc/贴图/音频路径绝对化）。
+
+依赖全部本地化在 `vendor/`（pixi.js MIT、pixi-live2d-display MIT、Live2D Cubism Core 专有二进制随应用分发许可），详见 [vendor/README.md](vendor/README.md)。
+
 ## 宠物包格式（做你自己的桌宠）
 
 ```
@@ -85,13 +97,17 @@ node tools/gen-sample-pet.js
 
 ```
 plugin.json          # Orbit Toolbox 插件清单
-backend.js           # 主进程：窗口/宠物包/IPC 面/置顶看门狗
-pet.html/css/js      # 精灵窗口渲染端（双缓冲播放/物理/点击穿透）
-pet-preload.js       # 沙箱桥
-panel.js/css         # 设置面板（light-dark 令牌）
+backend.js           # 主进程：窗口/宠物包/IPC 面/看门狗/碎碎念/锁/投递路由
+pet.html/css/js      # 精灵窗口骨架（物理/拖拽/弹弓/气泡/穿透，引擎无关）
+motion-webm.js       # 引擎 A：A/B 双缓冲 VP9-alpha 视频
+motion-live2d.js     # 引擎 B：pixi + Cubism WebGL（模型目录外部绑定）
+vendor/              # pixi / pixi-live2d-display / Cubism Core（许可见其 README）
+pet-preload.js       # 沙箱桥（拖放取路径在此，webUtils）
+panel.js/css         # 设置面板（宿主 .btn/.input 标准件 + light-dark 令牌）
 compat/pseudo-ctx.js # cordis-lite 兼容层
-pets/orbitian/       # 样例宠物包（原创程序化生成）
-tools/               # 素材生成 / 冒烟 / 面板截图
+pets/orbitian/       # 样例宠物包（原创程序化生成，webm 引擎）
+pets/ikaros-angel/   # Live2D 包描述（仅配置与映射，模型不入库）
+tools/               # 素材生成 / 冒烟 / 面板截图 / live2d 渲染 spike
 ```
 
 ## Roadmap

@@ -219,6 +219,19 @@ app.whenReady().then(async () => {
   if (!inSeason && hwn.error !== 'unknown anim') fail('out-of-season anim must be hidden: ' + JSON.stringify(hwn));
   ok(`season gate (${inSeason ? 'October: halloween in pool' : 'off-season: halloween hidden'})`);
 
+  /* --- live2d pack gracefully degrades without a model dir ---------------------- */
+  const angelEntry = (state.packs || []).find(p => p.id === 'ikaros-angel');
+  if (!angelEntry || angelEntry.engine !== 'live2d' || !angelEntry.needsModel) {
+    fail('live2d pack must list engine+needsModel when unbound: ' + JSON.stringify(state.packs));
+  }
+  const sw = await manager.call('desktop-pet', 'setPrefs', { pack: 'ikaros-angel' });
+  if (!sw.packError) fail('switching to unbound live2d pack should return packError: ' + JSON.stringify(sw));
+  const stAfter = await manager.call('desktop-pet', 'getState');
+  if (stAfter.pack.id !== 'orbitian') fail('unbound pack switch must not steal the stage: ' + stAfter.pack.id);
+  const badDir = await manager.call('desktop-pet', 'setPrefs', { modelDir: 'E:/definitely/not/here' });
+  if (badDir.ok) fail('nonexistent model dir must be refused');
+  ok('live2d pack degrades safely without a bound model dir');
+
   /* --- file-drop routing ---------------------------------------------------------- */
   fs.writeFileSync(path.join(tmp, 'drop.json'), '{"hello":"pet"}');
   fs.writeFileSync(path.join(tmp, 'drop.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
