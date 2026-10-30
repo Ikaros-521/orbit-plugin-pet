@@ -274,6 +274,7 @@
     if (e.button !== 0) return;
     dragging = true;
     stage.classList.add('dragging');
+    stopVoice();
     window.pet.touch(); // a user grab revokes any external takeover (main side)
     stopLoops();
     if (!movePending) { shadowX = window.screenX; shadowY = window.screenY; } // idle = OS is the authority
@@ -346,14 +347,28 @@
   const bubble = document.getElementById('bubble');
   let bubbleVisible = false;
   let bubbleTimer = 0;
+  let activeAudio = null;
 
   function applyMargin() {
     marginH = prefs.margin || 0;
     document.documentElement.style.setProperty('--margin', marginH + 'px');
   }
 
-  const speak = text => {
-    if (!prefs.voiceOn || !('speechSynthesis' in window)) return;
+  function stopVoice() {
+    if (activeAudio) {
+      try {
+        activeAudio.pause();
+        activeAudio.currentTime = 0;
+      } catch { /* ignore */ }
+      activeAudio = null;
+    }
+    if ('speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+    }
+  }
+
+  const fallbackSpeak = text => {
+    if (!('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -363,21 +378,59 @@
     } catch { /* no voice device: bubble only */ }
   };
 
+  const speak = (text, audioUrl, onAudioEnd) => {
+    if (!prefs.voiceOn) return;
+    stopVoice();
+
+    if (audioUrl) {
+      try {
+        const audio = new Audio(audioUrl);
+        activeAudio = audio;
+        audio.onended = () => {
+          if (activeAudio === audio) activeAudio = null;
+          if (onAudioEnd) onAudioEnd();
+        };
+        audio.onerror = () => {
+          if (activeAudio === audio) activeAudio = null;
+          fallbackSpeak(text);
+        };
+        audio.play().catch(() => fallbackSpeak(text));
+        return;
+      } catch {
+        fallbackSpeak(text);
+        return;
+      }
+    }
+
+    fallbackSpeak(text);
+  };
+
   function hideBubble() {
     if (!bubbleVisible) return;
     bubbleVisible = false;
     clearTimeout(bubbleTimer);
     bubble.classList.remove('on');
+    stopVoice();
   }
 
-  function showBubble(text) {
+  function showBubble(text, audioUrl) {
     if (!prefs.bubbleOn || !text || dragging) return; // the user is busy dragging — drop the chatter
+    stopVoice();
     bubble.textContent = text;
     bubble.classList.add('on');
     bubbleVisible = true;
     clearTimeout(bubbleTimer);
-    bubbleTimer = setTimeout(hideBubble, Math.min(9000, Math.max(2600, text.length * (prefs.lang === 'en' ? 70 : 150))));
-    speak(text);
+
+    if (audioUrl && prefs.voiceOn) {
+      const maxTimer = setTimeout(hideBubble, 15000);
+      speak(text, audioUrl, () => {
+        clearTimeout(maxTimer);
+        bubbleTimer = setTimeout(hideBubble, 1200);
+      });
+    } else {
+      bubbleTimer = setTimeout(hideBubble, Math.min(9000, Math.max(2600, text.length * (prefs.lang === 'en' ? 70 : 150))));
+      if (prefs.voiceOn) speak(text, null);
+    }
   }
 
   bubble.addEventListener('click', hideBubble);
@@ -454,9 +507,9 @@
     prefs = { ...prefs, ...p };
     if (p.margin !== undefined && p.margin !== prevMargin) applyMargin();
     if (p.bubbleOn === false) hideBubble();
-    if (p.voiceOn === false && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (p.voiceOn === false) stopVoice();
   });
-  window.pet.onBubble(({ text } = {}) => showBubble(text));
+  window.pet.onBubble(({ text, audioUrl } = {}) => showBubble(text, audioUrl));
   window.pet.onPlay(({ anim, once, playbackId }) => {
     stopLoops();
     switchTo(anim, once, () => { idle(); scheduleIdle(); scheduleWalk(); }, playbackId || null);
