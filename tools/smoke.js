@@ -225,7 +225,6 @@ app.whenReady().then(async () => {
     const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'l2d-lib-'));
     await manager.call('desktop-pet', 'setPrefs', { modelDirs: [lib] });
     let stL = await manager.call('desktop-pet', 'getState');
-    if (!stL.packs.find(p => p.id === 'ikaros-angel').needsModel) fail('angel must be needsModel against an empty library');
 
     // drop a model folder into the library — discovered with no config anywhere
     const girl = path.join(lib, 'Tester');

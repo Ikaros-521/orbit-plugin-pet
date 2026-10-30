@@ -61,6 +61,7 @@
               <div class="dpet-row dpet-lib-btns">
                 <button type="button" class="dpet-lib-open btn ghost small">${t('打开模型库…', 'Open library…')}</button>
                 <button type="button" class="dpet-lib-add btn ghost small">${t('添加模型目录…', 'Add model dir…')}</button>
+                <button type="button" class="dpet-lib-rescan btn ghost small">${t('刷新', 'Rescan')}</button>
               </div>
             </div>
             <label class="dpet-row dpet-check">
@@ -139,7 +140,7 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
-        library: $('.dpet-library'), dirs: $('.dpet-dirs'), libOpen: $('.dpet-lib-open'), libAdd: $('.dpet-lib-add'),
+        library: $('.dpet-library'), dirs: $('.dpet-dirs'), libOpen: $('.dpet-lib-open'), libAdd: $('.dpet-lib-add'), libRescan: $('.dpet-lib-rescan'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         tasks: $('.dpet-tasks'),
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
@@ -251,6 +252,15 @@
         if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
       });
       els.libOpen.addEventListener('click', () => { call('openModelLibrary'); });
+      els.libRescan.addEventListener('click', async () => {
+        els.libRescan.disabled = true;
+        try {
+          await call('rescan');
+          const st = await call('getState');
+          if (st && st.ok) { state = st.data; render(); }
+          if (els.quipResult) els.quipResult.textContent = t('已重新扫描模型库 ✓', 'Library rescanned ✓');
+        } finally { els.libRescan.disabled = false; }
+      });
       els.libAdd.addEventListener('click', async () => {
         const pick = await call('chooseModelDir');
         const dir = pick && pick.ok && pick.data && pick.data.dir;

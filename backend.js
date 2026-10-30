@@ -299,8 +299,12 @@ module.exports = {
     bindModelRoots();
 
     /* Live2D roots changed? rescan + rebind, fix the active pack, rebuild the
-       window when the engine flipped. */
-    function rescanAndBind() {
+       window when the engine flipped. Signature-gated: a file touched inside
+       the library must not restart a working pet. */
+    function packsSignature() {
+      return packs.map(p => `${p.id}:${p.needsModel ? 'x' : 'ok'}:${p.rootAlias || ''}`).join('|') + '#' + pack.id;
+    }
+    function rescanAndBind({ force = false } = {}) {
       bindModelRoots();
       packs = scanPacks();
       const cur = packById(pack.id);
@@ -309,6 +313,10 @@ module.exports = {
         if (usable) { pack = usable; prefs.pack = usable.id; }
         else if (cur) pack = cur;
       } else pack = cur;
+      const sig = packsSignature();
+      restartLibraryWatch(); // roots may have changed even when the pack list did not
+      if (!force && sig === lastPacksSig) return false;
+      lastPacksSig = sig;
       savePrefs();
       if (petWin && !petWin.isDestroyed()) {
         petWin.destroy();
@@ -316,6 +324,32 @@ module.exports = {
       }
       ensureWindow();
       pushState();
+      return true;
+    }
+    let lastPacksSig = null;
+
+    /* Auto-refresh: watch every library root so dropping a model folder in
+       surfaces it without the button (the button stays as a manual escape).
+       Watchers are cheap, non-recursive, and restart when roots change. */
+    const libWatchers = new Map(); // dir -> FSWatcher
+    let libDebounce = 0;
+    function restartLibraryWatch() {
+      for (const [dir, w] of libWatchers) { try { w.close(); } catch { /* gone */ } }
+      libWatchers.clear();
+      for (const dir of prefs.modelDirs) {
+        if (libWatchers.has(dir)) continue;
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          const w = fs.watch(dir, { persistent: false }, () => {
+            clearTimeout(libDebounce);
+            libDebounce = setTimeout(() => {
+              rescanAndBind();
+            }, 900);
+            libDebounce.unref?.();
+          });
+          libWatchers.set(dir, w);
+        } catch { /* unwatchable root (network share?) — manual rescan covers it */ }
+      }
     }
 
     /* model3.json cleaning: some exporters append trailing `//` disclaimer
@@ -860,7 +894,7 @@ module.exports = {
         require('electron').shell.openPath(MODEL_LIBRARY);
         return { ok: true, path: MODEL_LIBRARY };
       },
-      rescan: () => { rescanAndBind(); return { ok: true }; },
+      rescan: () => { rescanAndBind({ force: true }); return { ok: true }; },
       /* native picker for the Live2D model root (panel button) */
       chooseModelDir: async () => {
         const { dialog } = require('electron');
@@ -1016,6 +1050,7 @@ module.exports = {
     screen.on('display-metrics-changed', onDisplayChange);
     screen.on('display-removed', onDisplayChange);
 
+    restartLibraryWatch();
     if (prefs.visible) ensureWindow();
     const tasksBoot = setTimeout(() => pollTasks(), 1200);
     tasksBoot.unref?.();
@@ -1023,6 +1058,9 @@ module.exports = {
     tasksTimer.unref?.();
 
     teardown = () => {
+      for (const w of libWatchers.values()) { try { w.close(); } catch { /* gone */ } }
+      libWatchers.clear();
+      clearTimeout(libDebounce);
       clearTimeout(savePosTimer);
       clearTimeout(quipTimer);
       clearTimeout(tasksBoot);
