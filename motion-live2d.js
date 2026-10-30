@@ -16,7 +16,7 @@
   const PRI_FAW = 2;
 
   window.PetMotion.live2d = function createMotion(env) {
-    const { cfg, modelUrl } = env;
+    const { cfg, modelUrl, model3 } = env;
     const map = cfg.live2d || {};
     const stage = document.getElementById('stage');
 
@@ -49,7 +49,9 @@
       });
       app.view.classList.add('pet-body');
       stage.appendChild(app.view);
-      model = await PIXI.live2d.Live2DModel.from(modelUrl, {
+      // settings object (backend-cleaned model3.json with absolute @models
+      // paths) when available; raw url as fallback for well-formed models
+      model = await PIXI.live2d.Live2DModel.from(model3 || modelUrl, {
         autoInteract: true, // gaze follow + tap response on the canvas
         motionPreload: 'ALL',
       });

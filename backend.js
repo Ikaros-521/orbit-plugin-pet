@@ -103,6 +103,45 @@ module.exports = {
     }
     bindModelRoot();
 
+    /* model3.json cleaning: some exporters append trailing `//` disclaimer
+       comments that break strict JSON.parse (the official loaders use it).
+       Take the first balanced JSON object, then absolutize every relative
+       asset path against the @models root so the renderer can consume the
+       settings object directly. */
+    function extractFirstJsonObject(text) {
+      const start = text.indexOf('{');
+      if (start < 0) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const c = text[i];
+        if (esc) { esc = false; continue; }
+        if (inStr) { if (c.charCodeAt(0) === 92) esc = true; else if (c === '"') inStr = false; continue; }
+        if (c === '"') inStr = true;
+        else if (c === '{') depth++;
+        else if (c === '}') { depth--; if (depth === 0) return JSON.parse(text.slice(start, i + 1)); }
+      }
+      return null;
+    }
+    function loadLive2dSettings(p) {
+      const abs = rel => `plugin://${ctx.id}/@models/${String(rel).split('/').map(encodeURIComponent).join('/')}`;
+      try {
+        const raw = fs.readFileSync(path.join(prefs.modelDir, p.cfg.model), 'utf8');
+        const s = extractFirstJsonObject(raw);
+        const fr = s && s.FileReferences;
+        if (!fr) throw new Error('no FileReferences');
+        if (fr.Moc) fr.Moc = abs(fr.Moc);
+        (fr.Textures || []).forEach((t, i, arr) => { arr[i] = abs(t); });
+        (fr.Expressions || []).forEach(e => { if (e.File) e.File = abs(e.File); });
+        if (fr.Physics) fr.Physics = abs(fr.Physics);
+        if (fr.Pose) fr.Pose = abs(fr.Pose);
+        for (const g of Object.values(fr.Motions || {})) for (const m of (Array.isArray(g) ? g : [])) if (m.File) m.File = abs(m.File);
+        return s;
+      } catch (err) {
+        console.warn('[desktop-pet] live2d settings unusable (' + p.cfg.model + '):', err.message);
+        return null;
+      }
+    }
+
     /* --- sprite window ------------------------------------------------------ */
 
     let petWin = null;
@@ -450,7 +489,8 @@ module.exports = {
             modelUrl: pack.engine === 'live2d' && pack.cfg.model
               ? `plugin://${ctx.id}/@models/${String(pack.cfg.model).split('/').map(encodeURIComponent).join('/')}`
               : null,
-            scriptsBase: ctx.url('vendor'),
+            model3: pack.engine === 'live2d' ? loadLive2dSettings(pack) : null,
+            scriptsBase: ctx.url(''),
             prefs: prefsPayload(),
             displays: displays(),
           });

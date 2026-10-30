@@ -504,6 +504,7 @@
       cfg: init.pack,
       assetBase: init.assetBase,
       modelUrl: init.modelUrl || null,
+      model3: init.model3 || null,
       getPrefs: () => prefs,
     });
     const up = await m.ready;
