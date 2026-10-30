@@ -219,6 +219,26 @@ app.whenReady().then(async () => {
   if (!inSeason && hwn.error !== 'unknown anim') fail('out-of-season anim must be hidden: ' + JSON.stringify(hwn));
   ok(`season gate (${inSeason ? 'October: halloween in pool' : 'off-season: halloween hidden'})`);
 
+  /* off-by-a-level model dir picks auto-correct to the real root ------------- */
+  {
+    const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'l2d-root-'));
+    fs.mkdirSync(path.join(fake, 'model'), { recursive: true });
+    fs.writeFileSync(path.join(fake, 'model', 'cat.model3.json'), '{}'); // same tail as the angel pack
+    const deep = path.join(fake, 'model', 'demomodel.1024');
+    fs.mkdirSync(deep, { recursive: true });
+    const rFix = await manager.call('desktop-pet', 'setPrefs', { modelDir: deep });
+    const stFix = await manager.call('desktop-pet', 'getState');
+    if (!rFix.ok || stFix.modelDir !== fake) {
+      fail(`deep pick should normalize to ${fake}, got ${stFix.modelDir} (${JSON.stringify(rFix)})`);
+    }
+    const angelFix = stFix.packs.find(p => p.id === 'ikaros-angel');
+    if (angelFix.needsModel) fail('needsModel must clear after normalization');
+    await manager.call('desktop-pet', 'setPrefs', { modelDir: null }); // explicit unbind for the degradation checks below
+    const stUnbound = await manager.call('desktop-pet', 'getState');
+    if (stUnbound.packs.find(p => p.id === 'ikaros-angel').needsModel !== true) fail('unbind must restore needsModel');
+    ok('model dir pick normalizes up from wrong subfolder (and unbind restores needsModel)');
+  }
+
   /* --- live2d pack gracefully degrades without a model dir ---------------------- */
   const angelEntry = (state.packs || []).find(p => p.id === 'ikaros-angel');
   if (!angelEntry || angelEntry.engine !== 'live2d' || !angelEntry.needsModel) {

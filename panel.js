@@ -56,6 +56,7 @@
               <span class="dpet-row-label">${t('模型目录', 'Model dir')}</span>
               <code class="dpet-model-dir" title=""></code>
               <button type="button" class="dpet-model btn ghost small">${t('绑定…', 'Bind…')}</button>
+              <button type="button" class="dpet-model-unbind btn ghost small dpet-hidden" title="${t('解绑模型目录', 'Unbind model dir')}">✕</button>
             </div>
             <label class="dpet-row dpet-check">
               <input class="dpet-walk" type="checkbox" />
@@ -133,7 +134,7 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
-        modelRow: $('.dpet-modelrow'), modelDir: $('.dpet-model-dir'), model: $('.dpet-model'),
+        modelRow: $('.dpet-modelrow'), modelDir: $('.dpet-model-dir'), model: $('.dpet-model'), modelUnbind: $('.dpet-model-unbind'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         tasks: $('.dpet-tasks'),
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
@@ -177,6 +178,7 @@
         els.modelRow.classList.toggle('dpet-hidden', !hasLive2d);
         els.modelDir.textContent = state.modelDir || t('未绑定', 'not bound');
         els.modelDir.title = state.modelDir || '';
+        els.modelUnbind.classList.toggle('dpet-hidden', !state.modelDir);
 
         els.walk.checked = !!prefs.autoWalk;
         els.bubble.checked = !!prefs.bubbleOn;
@@ -240,6 +242,11 @@
         const res = await call('setPrefs', { modelDir: dir });
         const d = res && res.ok ? res.data : null;
         if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
+        const st = await call('getState');
+        if (st && st.ok) { state = st.data; render(); }
+      });
+      els.modelUnbind.addEventListener('click', async () => {
+        await call('setPrefs', { modelDir: null });
         const st = await call('getState');
         if (st && st.ok) { state = st.data; render(); }
       });

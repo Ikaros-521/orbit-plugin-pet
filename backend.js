@@ -95,6 +95,41 @@ module.exports = {
     }
     if (!pack) throw new Error('no pet pack found under pets/');
 
+    /* Users pick folders in a dialog and land one level off surprisingly often
+       (the textures subfolder, the model folder itself...). Given any chosen
+       dir, find the real model ROOT for a live2d pack: try walking up from the
+       pick, then a bounded walk down, matching <root>/<pack.model> exactly. */
+    function normalizeModelDir(dir, p) {
+      const wantTail = String(p.cfg.model).split('/').join(path.sep);
+      let cur = path.resolve(dir);
+      for (let up = 0; up < 5; up++) {
+        if (fs.existsSync(path.join(cur, wantTail))) return cur;
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        cur = parent;
+      }
+      const stack = [[path.resolve(dir), 0]];
+      while (stack.length) {
+        const [d, depth] = stack.shift();
+        let ents = [];
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+        for (const ent of ents) {
+          const full = path.join(d, ent.name);
+          if (ent.isFile() && full.endsWith(wantTail)) return full.slice(0, full.length - wantTail.length - 1);
+          if (ent.isDirectory() && depth < 3 && !ent.name.startsWith('.') && ent.name !== 'node_modules') stack.push([full, depth + 1]);
+        }
+      }
+      return null;
+    }
+    function findModelRoot(dir) {
+      for (const p of packs) {
+        if (p.engine !== 'live2d') continue;
+        const root = normalizeModelDir(dir, p);
+        if (root) return root;
+      }
+      return null;
+    }
+
     /* Bind the user model dir (when configured) as the @models asset root. */
     function bindModelRoot() {
       if (!prefs.modelDir) return false;
@@ -609,16 +644,31 @@ module.exports = {
             applyBounds(x, y, width, height);
           }
         }
+        if (args.modelDir === null || args.modelDir === '') {
+          // explicit unbind: drop the root and rescan so live2d packs fall back
+          prefs.modelDir = null;
+          if (typeof ctx.removeAssetRoot === 'function') ctx.removeAssetRoot('models');
+          packs = scanPacks();
+          const curNow = packById(pack.id);
+          if (curNow) pack = curNow;
+          if (pack.needsModel) {
+            const usable = packs.find(p => !p.needsModel);
+            if (usable) { pack = usable; prefs.pack = usable.id; }
+            reload = true;
+          }
+        }
         if (typeof args.modelDir === 'string' && args.modelDir.trim()) {
           const dir = args.modelDir.trim();
           if (dir === prefs.modelDir) { /* no-op */ }
           else if (fs.existsSync(dir)) {
-            prefs.modelDir = dir;
+            const fixed = findModelRoot(dir); // tolerate off-by-a-level picks
+            prefs.modelDir = fixed || dir;
             bindModelRoot();
             packs = scanPacks();
             const cur = packById(pack.id);
             if (cur) pack = cur; // refresh needsModel on the live pack object
             reload = true;       // engine may change -> fresh handshake
+            if (!fixed) console.warn('[desktop-pet] model dir bound but no pack model found under it (walked up/down):', dir);
           } else {
             return { ok: false, error: '目录不存在：' + dir };
           }
