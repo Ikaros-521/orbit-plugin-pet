@@ -91,6 +91,50 @@ app.whenReady().then(async () => {
   if (st2.anim !== 'happy' && st2.anim === 'idle') { /* already returned to idle — also fine */ }
   ok(`one-shot happy dispatched (anim now: ${st2.anim})`);
 
+  /* --- drag & toss simulation --------------------------------------------------
+     Synthetic PointerEvents with explicit screenX keep the velocity samples
+     deterministic; sendInputEvent would re-derive them from the live window
+     position, which our own move-requests are busy changing. */
+  const petWin = manager.windowsOf('desktop-pet')[0];
+  const dragSim = (moves) => petWin.webContents.executeJavaScript(`(async () => {
+    const stage = document.getElementById('stage');
+    const mk = (type, sx, sy, buttons) => stage.dispatchEvent(new PointerEvent(type, {
+      pointerId: 7, isPrimary: true, pointerType: 'mouse', button: 0, buttons,
+      clientX: sx, clientY: sy, screenX: sx, screenY: sy, bubbles: true, cancelable: true,
+    }));
+    const [x0, y0] = [200, 100];
+    let x = x0, y = y0;
+    mk('pointerdown', x, y, 1);
+    for (const [dx, dy, delay] of ${JSON.stringify(moves)}) {
+      x += dx; y += dy;
+      mk('pointermove', x, y, 1);
+      if (delay) await new Promise(r => setTimeout(r, delay));
+    }
+    mk('pointerup', x, y, 0);
+    return { endX: x - x0, endY: y - y0 };
+  })()`);
+
+  // slow 125Hz-ish drag stream: coalescing must keep the window on target
+  const before = petWin.getBounds();
+  await dragSim(Array.from({ length: 20 }, () => [-12, -4, 60]));
+  await sleep(600); // release velocity ~200px/s -> settle, no toss
+  const afterDrag = petWin.getBounds();
+  if (Math.abs(before.x - afterDrag.x) < 100) fail(`drag did not track: ${before.x} -> ${afterDrag.x}`);
+  ok(`drag stream (20 events) tracked: dx=${before.x - afterDrag.x}px`);
+
+  // fast flick -> toss physics -> must settle on the floor within a few seconds
+  await dragSim(Array.from({ length: 6 }, () => [40, -20, 12]));
+  let settled = false;
+  for (let i = 0; i < 24 && !settled; i++) {
+    await sleep(250);
+    const s = (await manager.call('desktop-pet', 'getState')).status;
+    settled = s && !s.airborne && !s.walking;
+  }
+  if (!settled) fail('toss never settled — physics stuck (airborne/walking loop?)');
+  const sFin = (await manager.call('desktop-pet', 'getState')).status;
+  if (petWin.isDestroyed()) fail('window died during toss');
+  ok(`flick tossed and settled cleanly (anim=${sFin.anim})`);
+
   /* --- prefs ------------------------------------------------------------------ */
   await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });
   const st3 = await manager.call('desktop-pet', 'getState');

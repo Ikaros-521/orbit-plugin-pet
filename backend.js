@@ -72,9 +72,30 @@ module.exports = {
     let topmostTimer = null;
     let savePosTimer = null;
     let lastStatus = null; // latest renderer status, surfaced for tests/panel
+    let lastBoundsKey = null; // "x,y,w,h": the renderer pumps up to 60 moves/s
+    let lastBoundsAt = 0;     // watchdog stays off while moves are flowing
 
     const canvas = pack.cfg.canvas || { w: 320, h: 180 };
     const winSize = size => ({ width: Math.round(size), height: Math.round(size * canvas.h / canvas.w) });
+
+    /* Single funnel for every window move/resize: clamp into a display, drop
+       duplicates, and take the cheap setPosition path when only x/y changed
+       (setBounds drags the resize machinery through DWM on every call). */
+    function applyBounds(x, y, width, height) {
+      if (!petWin || petWin.isDestroyed()) return null;
+      const pos = clampPos(x, y, width, height);
+      const key = `${pos.x},${pos.y},${width},${height}`;
+      if (key !== lastBoundsKey) {
+        lastBoundsKey = key;
+        lastBoundsAt = Date.now();
+        try {
+          const cur = petWin.getBounds();
+          if (cur.width === width && cur.height === height) petWin.setPosition(pos.x, pos.y);
+          else petWin.setBounds({ x: pos.x, y: pos.y, width, height });
+        } catch { /* raced close */ }
+      }
+      return pos;
+    }
 
     function displays() {
       return screen.getAllDisplays().map(d => ({
@@ -120,6 +141,8 @@ module.exports = {
         webPreferences: { preload: 'pet-preload.js', backgroundThrottling: false },
       });
       petWin.setAlwaysOnTop(true, 'screen-saver');
+      lastBoundsKey = `${pos.x},${pos.y},${width},${height}`;
+      lastBoundsAt = Date.now();
       petWin.loadURL(ctx.url('pet.html'));
       // showInactive: appearing must never steal focus from whatever the user is typing in
       if (prefs.visible) petWin.once('ready-to-show', () => { if (!petWin.isDestroyed()) petWin.showInactive(); });
@@ -137,8 +160,11 @@ module.exports = {
 
     /* Fullscreen apps and explorer restarts both demote topmost windows; a
        cheap periodic reassert keeps the pet above ordinary windows (it never
-       fights real topmost competitors like task manager). */
+       fights real topmost competitors like task manager). Skipped while the
+       renderer is pumping moves: SetWindowPos(HWND_TOPMOST) mid-drag would
+       reorder the window in-frame and read as a hitch. */
     topmostTimer = setInterval(() => {
+      if (Date.now() - lastBoundsAt < TOPMOST_TICK_MS / 2) return;
       if (petWin && !petWin.isDestroyed() && petWin.isVisible()) {
         petWin.setAlwaysOnTop(true, 'screen-saver');
       }
@@ -180,10 +206,9 @@ module.exports = {
       on('status', (_e, s) => { lastStatus = s; }),
       // movement / drag: clamp into a real display so the pet can't get lost
       on('set-bounds', (_e, b) => {
-        if (!petWin || petWin.isDestroyed() || !b) return;
+        if (!b) return;
         const { width, height } = winSize(prefs.size);
-        const pos = clampPos(b.x, b.y, width, height);
-        try { petWin.setBounds({ x: pos.x, y: pos.y, width, height }); } catch { /* raced close */ }
+        applyBounds(b.x, b.y, width, height);
       }),
       on('set-ignore', (_e, { ignore } = {}) => {
         if (!petWin || petWin.isDestroyed()) return;
@@ -234,8 +259,8 @@ module.exports = {
           if (petWin && !petWin.isDestroyed()) {
             const [x, y] = petWin.getPosition();
             const { width, height } = winSize(prefs.size);
-            const pos = clampPos(x, y, width, height);
-            petWin.setBounds({ ...pos, width, height });
+            lastBoundsKey = null; // force past dedupe: size genuinely changed
+            applyBounds(x, y, width, height);
           }
         }
         if (typeof args.pack === 'string') {
@@ -261,13 +286,10 @@ module.exports = {
         return { ok: true };
       },
       resetPosition: () => {
-        if (petWin && !petWin.isDestroyed()) {
-          const { width, height } = winSize(prefs.size);
-          const pos = defaultPos(width, height);
-          petWin.setBounds({ ...pos, width, height });
-          prefs.x = pos.x; prefs.y = pos.y;
-          savePrefs();
-        }
+        const { width, height } = winSize(prefs.size);
+        const def = defaultPos(width, height);
+        const pos = applyBounds(def.x, def.y, width, height);
+        if (pos) { prefs.x = pos.x; prefs.y = pos.y; savePrefs(); }
         return { ok: true };
       },
     };
@@ -286,8 +308,7 @@ module.exports = {
       if (petWin && !petWin.isDestroyed()) {
         const [x, y] = petWin.getPosition();
         const { width, height } = winSize(prefs.size);
-        const pos = clampPos(x, y, width, height);
-        try { petWin.setBounds({ ...pos, width, height }); } catch { /* raced close */ }
+        applyBounds(x, y, width, height);
       }
       send('displays', displays());
     };

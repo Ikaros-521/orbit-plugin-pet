@@ -103,14 +103,41 @@
     idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking) idle(); }, 6000 + Math.random() * 8000);
   }
 
+  /* --- window position ------------------------------------------------------ */
+
+  /* The renderer owns a shadow position while the pet is under animation:
+     window.screenX lags pending setBounds round-trips, and integrating
+     movement from a stale read rubber-bands the window. Raw pointermove can
+     fire 125-1000x/s — faster than DWM can move a layered window — so drag
+     requests coalesce into one IPC per frame; rAF-driven walks/tosses send
+     directly (already frame-aligned). */
+  let shadowX = 0, shadowY = 0;
+  let moveRaf = 0, movePending = false;
+
+  function moveNow(x, y) {
+    shadowX = x; shadowY = y;
+    window.pet.setBounds({ x: Math.round(x), y: Math.round(y) });
+  }
+
+  function requestMove(x, y) {
+    shadowX = x; shadowY = y;
+    movePending = true;
+    if (!moveRaf) {
+      moveRaf = requestAnimationFrame(() => {
+        moveRaf = 0;
+        if (movePending) { movePending = false; window.pet.setBounds({ x: Math.round(shadowX), y: Math.round(shadowY) }); }
+      });
+    }
+  }
+
   /* --- walking ----------------------------------------------------------- */
 
   let walking = false;
   let walkRaf = 0;
 
   function currentDisplay() {
-    const cx = window.screenX + window.innerWidth / 2;
-    const cy = window.screenY + window.innerHeight / 2;
+    const cx = shadowX + window.innerWidth / 2;
+    const cy = shadowY + window.innerHeight / 2;
     let best = displays[0];
     let bestD = Infinity;
     for (const d of displays) {
@@ -145,13 +172,13 @@
       if (!walking) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const x = window.screenX;
+      const x = shadowX;
       const dir = targetX > x ? 1 : -1;
       setFacing(dir > 0);
       const next = x + dir * speed * dt;
       const arrived = dir > 0 ? next >= targetX : next <= targetX;
       // stay glued to the floor while walking
-      window.pet.setBounds({ x: arrived ? targetX : next, y: floorY() });
+      moveNow(arrived ? targetX : next, floorY());
       if (arrived) { endWalk(); return; }
       walkRaf = requestAnimationFrame(step);
     };
@@ -197,31 +224,31 @@
       const dt = Math.min(0.04, (now - last) / 1000);
       last = now;
       vy += G * dt;
-      let x = window.screenX + vx * dt;
-      let y = window.screenY + vy * dt;
+      shadowX += vx * dt;
+      shadowY += vy * dt;
       const wa = (currentDisplay() || {}).workArea;
       const floor = floorY();
       const ceil = wa ? wa.y : 0;
-      if (y >= floor) {
-        y = floor;
-        if (Math.abs(vy) < 140 && Math.abs(vx) < 60) { settle(x, y); return; }
+      if (shadowY >= floor) {
+        shadowY = floor;
+        if (Math.abs(vy) < 140 && Math.abs(vx) < 60) { settle(); return; }
         vy = -vy * REST; vx *= 0.72;
       }
-      if (y < ceil) { y = ceil; vy = Math.abs(vy) * REST; }
+      if (shadowY < ceil) { shadowY = ceil; vy = Math.abs(vy) * REST; }
       if (wa) {
-        if (x < wa.x) { x = wa.x; vx = Math.abs(vx) * WALL; }
-        if (x > wa.x + wa.width - window.innerWidth) { x = wa.x + wa.width - window.innerWidth; vx = -Math.abs(vx) * WALL; }
+        if (shadowX < wa.x) { shadowX = wa.x; vx = Math.abs(vx) * WALL; }
+        if (shadowX > wa.x + wa.width - window.innerWidth) { shadowX = wa.x + wa.width - window.innerWidth; vx = -Math.abs(vx) * WALL; }
       }
-      window.pet.setBounds({ x, y });
+      moveNow(shadowX, shadowY);
       physRaf = requestAnimationFrame(step);
     };
     physRaf = requestAnimationFrame(step);
   }
 
-  function settle(x, y) {
+  function settle() {
     airborne = false;
     cancelAnimationFrame(physRaf);
-    window.pet.setBounds({ x, y: floorY() });
+    moveNow(shadowX, floorY());
     idle();
     scheduleIdle();
     scheduleWalk();
@@ -240,24 +267,25 @@
     dragging = true;
     stage.classList.add('dragging');
     stopLoops();
+    if (!movePending) { shadowX = window.screenX; shadowY = window.screenY; } // idle = OS is the authority
     downAt = performance.now();
     downSX = e.screenX; downSY = e.screenY;
-    downWX = window.screenX; downWY = window.screenY;
+    downWX = shadowX; downWY = shadowY; // anchor from shadow: window.screenX may lag a just-settled toss
     moved = 0;
     samples = [{ t: downAt, sx: downSX, sy: downSY }];
-    stage.setPointerCapture(e.pointerId);
+    try { stage.setPointerCapture(e.pointerId); } catch { /* untrusted/synthetic event — listeners on stage suffice */ }
   });
 
   stage.addEventListener('pointermove', e => {
     if (!dragging) return;
     samples.push({ t: performance.now(), sx: e.screenX, sy: e.screenY });
     while (samples.length > 2 && performance.now() - samples[0].t > 120) samples.shift();
-    // absolute positioning from the press anchor: main-side clamping can't
-    // accumulate drift because window.screenX/Y is re-read every move
+    // absolute positioning from the press anchor; requestMove coalesces the
+    // raw (up to 1000Hz) event stream into one bounds IPC per frame
     const nx = downWX + (e.screenX - downSX);
     const ny = downWY + (e.screenY - downSY);
     moved = Math.max(moved, Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY));
-    window.pet.setBounds({ x: nx, y: ny });
+    requestMove(nx, ny);
   });
 
   const endDrag = e => {
@@ -284,7 +312,7 @@
     const vx = (last.sx - first.sx) / ms * 1000;
     const vy = (last.sy - first.sy) / ms * 1000;
     if (Math.hypot(vx, vy) > 250) toss(vx, vy);
-    else settle(window.screenX, window.screenY);
+    else settle();
   };
   stage.addEventListener('pointerup', endDrag);
   stage.addEventListener('pointercancel', endDrag);
@@ -316,12 +344,18 @@
 
   setInterval(() => {
     const el = frontEl();
+    // at rest the main process is the authority (it may have clamped us on a
+    // display change) — fold its position back into the shadow so the next
+    // drag/toss starts from where the window really is
+    if (!dragging && !walking && !airborne && !movePending) {
+      shadowX = window.screenX; shadowY = window.screenY;
+    }
     window.pet.status({
       anim: current,
       playing: el && !el.paused && !el.ended,
       t: el ? Math.round(el.currentTime * 100) / 100 : 0,
       ready: el ? el.readyState : 0,
-      x: window.screenX, y: window.screenY,
+      x: Math.round(shadowX), y: Math.round(shadowY),
       walking, airborne,
     });
   }, 700);
@@ -330,6 +364,7 @@
 
   function start() {
     current = null;
+    shadowX = window.screenX; shadowY = window.screenY;
     const first = cfg.anims.find(a => (a.role === 'idle' || !a.role)) || cfg.anims[0];
     switchTo(first.name, false, null);
     scheduleIdle();
