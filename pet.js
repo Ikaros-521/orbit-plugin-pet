@@ -418,8 +418,8 @@
     stopVoice();
   }
 
-  function showBubble(text, audioUrl) {
-    if (!prefs.bubbleOn || !text || dragging) return;
+  function showBubble(text, audioUrl, force = false) {
+    if ((!prefs.bubbleOn && !force) || !text || dragging) return;
     stopVoice();
     bubble.textContent = text;
     bubble.classList.add('on');
@@ -548,7 +548,7 @@
     if (p.bubbleOn === false) hideBubble();
     if (p.voiceOn === false) stopVoice();
   });
-  window.pet.onBubble(({ text, audioUrl } = {}) => showBubble(text, audioUrl));
+  window.pet.onBubble(({ text, audioUrl, force } = {}) => showBubble(text, audioUrl, !!force));
   window.pet.onPlay(({ anim, once, playbackId }) => {
     if (!motion) return;
     stopLoops();

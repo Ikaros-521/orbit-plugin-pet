@@ -298,6 +298,45 @@ app.whenReady().then(async () => {
   if (!stT || stT.tasks < 3) fail('todo badge should mirror memo open tasks: ' + JSON.stringify(stT && stT.tasks));
   ok(`todo badge mirrors memo (${stT.tasks} open tasks incl. the seeded note)`);
 
+  /* --- memo companion: todo-done celebration & reminder wakeup --------------- */
+  const todoRes = await manager.call('memo', 'todoCreate', { title: '给桌宠买小鱼干' });
+  const newTodo = todoRes && todoRes.todo;
+  if (!newTodo || !newTodo.id) fail('todoCreate in smoke failed: ' + JSON.stringify(todoRes));
+  await sleep(400);
+  const stT2 = await manager.call('desktop-pet', 'getState');
+  if (stT2.tasks !== stT.tasks + 1) fail(`tasks badge should update immediately on changed: got ${stT2.tasks}, want ${stT.tasks + 1}`);
+  ok(`todo badge auto-syncs on memo changed: ${stT2.tasks} open tasks`);
+
+  // Complete the todo -> pet should celebrate and show praise bubble
+  await manager.call('memo', 'todoToggle', { id: newTodo.id });
+  let celebOk = false;
+  for (let i = 0; i < 15; i++) {
+    await sleep(300);
+    const s = (await manager.call('desktop-pet', 'getState')).status;
+    if (s && (s.anim === 'celebrate' || s.anim === 'happy') && s.bubble) { celebOk = true; break; }
+  }
+  if (!celebOk) fail('pet did not celebrate on memo todo-done');
+  ok('memo todo-done -> pet celebrate animation + cheer bubble');
+
+  // Scheduled reminder: hide pet first, then broadcast reminder -> pet must wake up and alert
+  await manager.call('desktop-pet', 'toggle'); // hide
+  let stHide = await manager.call('desktop-pet', 'getState');
+  if (stHide.visible) fail('toggle hide before reminder failed');
+
+  // Broadcast reminder from memo
+  manager.broadcast('memo', 'reminder', { id: 'rem-1', title: '重要会议' });
+  let alertOk = false;
+  for (let i = 0; i < 15; i++) {
+    await sleep(300);
+    const stW = await manager.call('desktop-pet', 'getState');
+    if (stW && stW.visible && stW.status && (stW.status.anim === 'thinking' || stW.status.anim === 'celebrate' || stW.status.anim === 'click') && stW.status.bubble) {
+      alertOk = true;
+      break;
+    }
+  }
+  if (!alertOk) fail('pet did not wake up and alert on memo reminder');
+  ok('memo reminder -> wakes pet up + alert animation + reminder bubble');
+
   /* --- spring home -------------------------------------------------------------------- */
   await manager.call('desktop-pet', 'setPrefs', { autoWalk: false });
   const rp = await manager.call('desktop-pet', 'resetPosition');

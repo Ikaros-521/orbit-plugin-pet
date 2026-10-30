@@ -570,8 +570,8 @@ module.exports = {
     };
     let quipTimer = null;
     let quipSeq = 0;
-    const sendQuip = async (text) => {
-      if (!prefs.bubbleOn) return { ok: false, error: 'bubble is off' };
+    const sendQuip = async (text, { force = false } = {}) => {
+      if (!prefs.bubbleOn && !force) return { ok: false, error: 'bubble is off' };
       if (text === undefined && isLocked()) return { ok: false, error: 'locked' }; // self-chatter yields to a takeover
       const rt = petWin && !petWin.isDestroyed() && petWin.isVisible();
       if (!rt) return { ok: false, error: 'pet is hidden' };
@@ -589,15 +589,15 @@ module.exports = {
           });
           if (mySeq !== quipSeq) return { ok: true, dropped: true };
           if (ttsRes && ttsRes.ok && ttsRes.audioUrl) {
-            send('bubble', { text: body, audioUrl: ttsRes.audioUrl, duration: ttsRes.duration, engine: 'edge-tts' });
+            send('bubble', { text: body, audioUrl: ttsRes.audioUrl, duration: ttsRes.duration, engine: 'edge-tts', force });
             return { ok: true, text: body, audioUrl: ttsRes.audioUrl };
           }
         } catch { /* synthesize error, fallback below */ }
         if (mySeq === quipSeq) {
-          send('bubble', { text: body, engine: 'system', fallback: true });
+          send('bubble', { text: body, engine: 'system', fallback: true, force });
         }
       } else {
-        send('bubble', { text: body, engine: 'system' });
+        send('bubble', { text: body, engine: 'system', force });
       }
       return { ok: true, text: body };
     };
@@ -607,7 +607,10 @@ module.exports = {
         // when todos are piling up, nag about them at most every 20 minutes
         if (tasksState.count > 0 && Date.now() - tasksState.lastNag > 20 * 60000) {
           tasksState.lastNag = Date.now();
-          sendQuip(`备忘录里还有 ${tasksState.count} 件事没勾完呢`);
+          const nagMsg = prefs.lang === 'en'
+            ? `You still have ${tasksState.count} tasks left in Memo!`
+            : `备忘录里还有 ${tasksState.count} 件事没勾完呢，要加油哦`;
+          sendQuip(nagMsg);
         } else {
           sendQuip();
         }
@@ -706,10 +709,10 @@ module.exports = {
       return { ok: true, pluginId: target, name: nm };
     }
 
-    /* --- todo badge from memo -------------------------------------------------- */
+    /* --- todo badge & companion integration with memo ------------------------ */
 
-    /* A red corner badge mirrors the unchecked task lines memo keeps. Polling
-       goes through the core callPlugin surface — no file-format coupling. */
+    /* A red corner badge mirrors the unchecked tasks memo keeps.
+       Plus companion reactions: scheduled reminder wake-up and todo-completion celebration. */
     let tasksState = { count: 0, lastNag: 0 };
     let tasksTimer = null;
     async function pollTasks() {
@@ -717,9 +720,16 @@ module.exports = {
       let open = 0;
       try {
         const data = await ctx.callPlugin('memo', 'list');
-        for (const n of (data && Array.isArray(data.notes) ? data.notes : [])) {
-          for (const line of String(n.content || '').split('\n')) {
-            if (/^\s*[-*+]\s+\[ \]/.test(line)) open++;
+        if (data && data.stats && typeof data.stats.totalOpen === 'number') {
+          open = data.stats.totalOpen;
+        } else {
+          for (const t of (data && Array.isArray(data.todos) ? data.todos : [])) {
+            if (!t.done && !t.completed) open++;
+          }
+          for (const n of (data && Array.isArray(data.notes) ? data.notes : [])) {
+            for (const line of String(n.content || '').split('\n')) {
+              if (/^\s*[-*+]\s+\[ \]/.test(line)) open++;
+            }
           }
         }
       } catch { /* memo disabled or gone — badge sleeps quietly */ }
@@ -727,6 +737,64 @@ module.exports = {
         tasksState.count = open;
         send('tasks', { count: open });
         pushState();
+      }
+    }
+
+    function handleMemoReminder(reminder) {
+      if (!reminder) return;
+      // Wake up the pet if hidden
+      if (!prefs.visible) {
+        prefs.visible = true;
+        savePrefs();
+      }
+      ensureWindow();
+      if (petWin && !petWin.isDestroyed()) {
+        if (!petWin.isVisible()) petWin.showInactive();
+      }
+      // Action reaction (thinking / celebrate / click)
+      const anim = supportsAnim('thinking') ? 'thinking' : (supportsAnim('celebrate') ? 'celebrate' : (supportsAnim('click') ? 'click' : null));
+      if (anim) {
+        send('play', { anim, once: true, playbackId: null });
+      }
+      // Voice & Bubble broadcast
+      const title = reminder.title || (prefs.lang === 'en' ? 'Todo item' : '待办事项');
+      const text = prefs.lang === 'en'
+        ? `⏰ Reminder: [${title}] time is up!`
+        : `⏰ 提醒：【${title}】到时间啦！`;
+      sendQuip(text, { force: true });
+    }
+
+    function handleMemoTodoDone(doneInfo) {
+      if (doneInfo && doneInfo.stats && typeof doneInfo.stats.totalOpen === 'number') {
+        tasksState.count = doneInfo.stats.totalOpen;
+        send('tasks', { count: tasksState.count });
+        pushState();
+      } else {
+        pollTasks();
+      }
+      // Celebration action
+      const anim = supportsAnim('celebrate') ? 'celebrate' : (supportsAnim('happy') ? 'happy' : null);
+      if (anim) {
+        ensureWindow();
+        send('play', { anim, once: true, playbackId: null });
+      }
+      // Cheerful bubble & voice
+      const title = doneInfo && doneInfo.todo && doneInfo.todo.title ? doneInfo.todo.title : '';
+      const text = prefs.lang === 'en'
+        ? (title ? `Awesome! Finished "${title}" ✨` : 'Awesome! Task completed ✨')
+        : (title ? `太棒啦！搞定了「${title}」✨` : '太棒啦！搞定了一项待办✨');
+      sendQuip(text, { force: true });
+    }
+
+    function handleMemoChanged(payload) {
+      if (payload && payload.stats && typeof payload.stats.totalOpen === 'number') {
+        if (tasksState.count !== payload.stats.totalOpen) {
+          tasksState.count = payload.stats.totalOpen;
+          send('tasks', { count: tasksState.count });
+          pushState();
+        }
+      } else {
+        pollTasks();
       }
     }
 
@@ -770,7 +838,7 @@ module.exports = {
       }),
       on('file-drop', (_e, info) => { handleFileDrop(info).catch(() => {}); }),
       on('tasks-click', () => {
-        if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('memo');
+        if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('memo', { view: 'todos' });
       }),
       // movement / drag: clamp into a real display so the pet can't get lost
       on('set-bounds', (_e, b) => {
@@ -796,6 +864,10 @@ module.exports = {
         Menu.buildFromTemplate([
           { label: '动作 / Actions', submenu: animItems },
           { type: 'separator' },
+          {
+            label: '📅 待办与日历 / Todo & Calendar',
+            click: () => { if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('memo', { view: 'calendar' }); },
+          },
           { label: '说一句 / Say something', click: () => sendQuip() },
           { label: '回到默认位置 / Spring home', click: () => api.resetPosition() },
           {
@@ -1037,6 +1109,19 @@ module.exports = {
       });
     }
 
+    let unsubMemo = null;
+    if (typeof ctx.onPluginEvent === 'function') {
+      unsubMemo = ctx.onPluginEvent('memo', ({ channel, payload }) => {
+        if (channel === 'reminder') {
+          handleMemoReminder(payload);
+        } else if (channel === 'todo-done') {
+          handleMemoTodoDone(payload);
+        } else if (channel === 'changed') {
+          handleMemoChanged(payload);
+        }
+      });
+    }
+
     /* --- lifecycle ------------------------------------------------------------ */
 
     const onDisplayChange = () => {
@@ -1067,6 +1152,7 @@ module.exports = {
       clearInterval(tasksTimer);
       clearInterval(topmostTimer);
       if (unsubWf) { try { unsubWf(); } catch { /* core already gone */ } }
+      if (unsubMemo) { try { unsubMemo(); } catch { /* core already gone */ } }
       screen.removeListener('display-metrics-changed', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);
       for (const off of offs) off();
