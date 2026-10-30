@@ -30,6 +30,12 @@ dsh-pet 锚定 DSH 会话，我们的联动对象换成工具箱自己的状态�
 - [x] 节日动画池：pet.json `season: [10]` 月份门控 + 示例「南瓜装小轨」正值万圣节窗口
 - [ ] 多宠同屏 + 互撞（collision broker 思路；backend 窗口表改 Map）——顺延 v0.5
 
+## Live2D 引擎（v0.5 提前实施，原 Phase 4 的子集）
+
+- [x] 第二渲染后端：motion-live2d（pixi + Cubism Core，vendor 本地化，模型走用户目录绑定不进仓）
+- [x] 语义名 → 动效组/表情映射（配置即可接任意第三方模型）+ settings 清洗器（尾部注释/相对路径/Sound）
+- [x] core `@alias` 外部资源根 = Phase 4 pack 导入的底座，已就位
+
 ## Phase 4 · v1.0 「能繁殖」——宠物包生态
 
 - [ ] pack 导入 UI：面板选文件夹/zip → 校验 → 装进用户 pack 目录（需 plugin:// 加 data-dir 路由，唯一核心改动点）
