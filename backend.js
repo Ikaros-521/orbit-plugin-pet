@@ -794,7 +794,7 @@ module.exports = {
             }));
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
         Menu.buildFromTemplate([
-          ...animItems,
+          { label: '动作 / Actions', submenu: animItems },
           { type: 'separator' },
           { label: '说一句 / Say something', click: () => sendQuip() },
           { label: '回到默认位置 / Spring home', click: () => api.resetPosition() },
