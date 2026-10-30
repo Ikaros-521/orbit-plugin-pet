@@ -14,7 +14,9 @@
        under a visible bubble or the todo badge (hit-testing lives in pet.js) -->
   <div id="zone">
     <div id="tasks" class="hidden"><span></span></div>
-    <div id="bubble"></div>
+    <!-- #bubbleText is the scroller for over-long texts: overflow clips both
+         axes, so the tail arrow stays on #bubble, outside the clip -->
+    <div id="bubble"><div id="bubbleText"></div></div>
   </div>
   <div id="stage">
     <!-- A/B double buffer (webm engine): the incoming animation loads and

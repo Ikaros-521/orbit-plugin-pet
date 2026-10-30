@@ -349,8 +349,10 @@
 
   let marginH = 0;
   const bubble = document.getElementById('bubble');
+  const bubbleText = document.getElementById('bubbleText');
   let bubbleVisible = false;
   let bubbleTimer = 0;
+  let bubbleScrollRaf = 0;
   let activeAudio = null;
 
   function applyMargin() {
@@ -410,30 +412,73 @@
     fallbackSpeak(text);
   };
 
+  /* Long texts are clipped to the zone height and reveal themselves by
+     scrolling; overflow-y on #bubble would clip the ::after tail, so the
+     scroller is the inner #bubbleText. */
+  function stopBubbleScroll() {
+    if (bubbleScrollRaf) {
+      cancelAnimationFrame(bubbleScrollRaf);
+      bubbleScrollRaf = 0;
+    }
+  }
+
+  function startBubbleScroll(dist, leadMs, scrollMs) {
+    const t0 = performance.now();
+    const tick = now => {
+      const t = Math.max(0, now - t0 - leadMs);
+      const p = scrollMs <= 0 ? 1 : Math.min(1, t / scrollMs);
+      bubbleText.scrollTop = dist * p;
+      bubbleScrollRaf = p < 1 ? requestAnimationFrame(tick) : 0;
+    };
+    bubbleScrollRaf = requestAnimationFrame(tick);
+  }
+
   function hideBubble() {
     if (!bubbleVisible) return;
     bubbleVisible = false;
     clearTimeout(bubbleTimer);
+    stopBubbleScroll();
     bubble.classList.remove('on');
     stopVoice();
   }
 
   function showBubble(text, audioUrl, force = false) {
     if ((!prefs.bubbleOn && !force) || !text || dragging) return;
+    stopBubbleScroll();
     stopVoice();
-    bubble.textContent = text;
+    bubbleText.textContent = text;
     bubble.classList.add('on');
     bubbleVisible = true;
+    bubbleText.scrollTop = 0;
     clearTimeout(bubbleTimer);
 
+    // hold time follows the text; a clipped text also pays for its reveal
+    // scroll (lead → scroll → tail) paced like reading it through
+    const perChar = prefs.lang === 'en' ? 70 : 150;
+    let holdMs = Math.max(2600, text.length * perChar);
+    const overflow = bubbleText.scrollHeight - bubbleText.clientHeight;
+    if (overflow > 4) {
+      const cs = getComputedStyle(bubble);
+      const lineH = parseFloat(cs.lineHeight) || 19;
+      const charW = (parseFloat(cs.fontSize) || 13) * (prefs.lang === 'en' ? .56 : 1);
+      const charsPerLine = Math.max(6, bubbleText.clientWidth / charW);
+      // a speaking voice reads slower than silent reading — follow it
+      const scrollPerChar = audioUrl && prefs.voiceOn ? 220 : perChar;
+      const lead = 1400, tail = 1600;
+      let scrollMs = (overflow / lineH) * charsPerLine * scrollPerChar;
+      holdMs = Math.min(60000, Math.max(holdMs, lead + scrollMs + tail));
+      scrollMs = Math.min(scrollMs, Math.max(600, holdMs - lead - tail));
+      startBubbleScroll(overflow, lead, scrollMs);
+    }
+
     if (audioUrl && prefs.voiceOn) {
-      const maxTimer = setTimeout(hideBubble, 15000);
+      const maxTimer = setTimeout(hideBubble, Math.max(15000, holdMs + 8000));
       speak(text, audioUrl, () => {
         clearTimeout(maxTimer);
         bubbleTimer = setTimeout(hideBubble, 1200);
       });
     } else {
-      bubbleTimer = setTimeout(hideBubble, Math.min(9000, Math.max(2600, text.length * (prefs.lang === 'en' ? 70 : 150))));
+      bubbleTimer = setTimeout(hideBubble, Math.min(60000, holdMs));
       if (prefs.voiceOn) speak(text, null);
     }
   }

@@ -57,6 +57,13 @@ body { display: flex; flex-direction: column; }
   border-top-color: rgba(28, 32, 38, .88);
   border-bottom: 0;
 }
+/* over-long texts cap at the zone height and auto-scroll inside at a
+   reading pace (pet.js drives scrollTop; no scrollbar is ever shown) */
+#bubbleText {
+  display: block;
+  max-height: calc(var(--margin, 120px) - 28px);
+  overflow: hidden;
+}
 
 /* --- todo badge (memo's unchecked tasks; click opens memo) -------------------- */
 #tasks {
