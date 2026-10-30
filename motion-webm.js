@@ -92,7 +92,7 @@
 
     return {
       engine: 'webm',
-      ready: Promise.resolve(),
+      ready: Promise.resolve(true), // boot checks truthiness — undefined read as a dead engine
       play,
       current: () => current,
       has: name => (name === 'idle' ? idlePool().length > 0 : !!resolve(name)),

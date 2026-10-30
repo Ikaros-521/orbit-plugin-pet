@@ -68,18 +68,34 @@ function arcStroke(cx, cy, r, a0, a1, w, fill) {
 }
 
 /* elliptical-arc stroke — same windowing as arcStroke but on an rx/ry ring;
-   this is what the orbital ring (and the body rim-light) are drawn with */
+   this is what the orbital ring (and the body rim-light) are drawn with.
+   Distance is the true Euclidean distance to the curve (Newton-refined foot
+   point). The cheap scaled-space pseudo-distance (hypot(q)-1)*min(rx,ry)
+   lower-bounds it and culls far pixels, but must not paint by itself: on a
+   squat ellipse it flares w*rx/min(rx,ry) past the end caps, and clipping
+   that flare at the bbox is what used to slice the ring's sides flat. */
 function ellipseArcStroke(cx, cy, rx, ry, a0, a1, w, fill) {
+  const m = Math.min(rx, ry);
+  const pad = w / 2 + 2;
   return {
-    bbox: [cx - rx - w, cy - ry - w, cx + rx + w, cy + ry + w],
+    bbox: [cx - rx - pad, cy - ry - pad, cx + rx + pad, cy + ry + pad],
     sdf(x, y) {
-      const qx = (x - cx) / rx, qy = (y - cy) / ry;
-      const ang = Math.atan2(qy, qx);
-      let a = ang;
+      const P = (Math.hypot((x - cx) / rx, (y - cy) / ry) - 1) * m;
+      if (Math.abs(P) > w / 2 + 1.5) return 1e6;
+      let a = Math.atan2((y - cy) / ry, (x - cx) / rx);
       while (a < a0 - Math.PI) a += 2 * Math.PI;
       while (a > a1 + Math.PI) a -= 2 * Math.PI;
       if (a < a0 - 1e-6 || a > a1 + 1e-6) return 1e6;
-      return Math.abs(Math.hypot(qx, qy) - 1) * Math.min(rx, ry) - w / 2;
+      let t = a;
+      for (let i = 0; i < 3; i++) {
+        const ct = Math.cos(t), st = Math.sin(t);
+        const dx = x - (cx + rx * ct), dy = y - (cy + ry * st);
+        const d1 = -dx * rx * st + dy * ry * ct;                       // (p-E)·E'
+        const d2 = rx * rx * st * st + ry * ry * ct * ct + dx * rx * ct + dy * ry * st;
+        if (Math.abs(d2) < 1e-6) break;
+        t += Math.max(-0.4, Math.min(0.4, d1 / d2));
+      }
+      return Math.hypot(x - (cx + rx * Math.cos(t)), y - (cy + ry * Math.sin(t))) - w / 2;
     },
     fill: () => fill,
   };
@@ -175,7 +191,7 @@ const FLOOR = 158;
 /* the tilted orbital ring worn around the head — front arc crosses the
    forehead, back arc passes behind the crown; sized so the back half
    visibly clears the head and reads as encircling it */
-const RING = { cy: 52, rx: 78, ry: 17, w: 4 };
+const RING = { cy: 52, rx: 78, ry: 17, w: 4.5 };
 
 /* --- mascot parts -------------------------------------------------------------- */
 
@@ -217,15 +233,18 @@ function handShapes({ dx = 0, dy = 0, l = {}, r = {} }) {
   return [...mk(-1, l), ...mk(1, r)];
 }
 
-function feetShapes({ dx = 0, liftL = 0, liftR = 0 }) {
+function feetShapes({ dx = 0, liftL = 0, liftR = 0, fade = 0 }) {
   const fy = lift => 1 - Math.min(lift, 20) / 26; // squash as the foot lifts
+  const vis = 1 - clamp01(fade); // airborne feet tuck away (fade out)
+  const limbA = () => rgba(C.limb, vis);
+  const outA = () => rgba(C.outline, vis);
   const mk = (side, lift) => {
     const fx = BODY.cx + side * 26 + dx;
     const fyy = FLOOR - 7 - lift;
     return [
-      ellipse(fx, fyy, 12, 9, () => C.outline, { sx: 1.14, sy: 1.18 }),
-      ellipse(fx, fyy, 12, 9, () => C.limb, { sy: fy(lift) }),
-      ellipse(fx - 3.5, fyy - 3.5, 4, 2.4, () => rgba([255, 255, 255], 0.45)),
+      ellipse(fx, fyy, 12, 9, outA, { sx: 1.14, sy: 1.18 }),
+      ellipse(fx, fyy, 12, 9, limbA, { sy: fy(lift) }),
+      ellipse(fx - 3.5, fyy - 3.5, 4, 2.4, () => rgba([255, 255, 255], 0.45 * vis)),
     ];
   };
   return [...mk(-1, liftL), ...mk(1, liftR)];
@@ -275,7 +294,8 @@ function faceShapes({ eye = 1, mouth = 'smile', dy = 0, dx = 0, eyeDx = 0, eyeDy
 /* the orbital ring, split into the half behind the head and the half in
    front; the satellite rides the ring at angle th and flips depth as it
    passes behind. opts tune per-animation behaviour. */
-function ringShapes({ dy = 0, th, alpha = 1, satColor = null, satScale = 1, glow = 1 }) {
+function ringShapes({ dx = 0, dy = 0, th, alpha = 1, satColor = null, satScale = 1, glow = 1 }) {
+  const cx = BODY.cx + dx;
   const cy = RING.cy + dy;
   const A = a => rgba([255, 255, 255], a);
   const back = [], front = [];
@@ -284,34 +304,44 @@ function ringShapes({ dy = 0, th, alpha = 1, satColor = null, satScale = 1, glow
   const halves = [backHalf, frontHalf];
   for (const h of halves) {
     if (glow > 0.05) {
-      h.arr.push(ellipseArcStroke(BODY.cx, cy, RING.rx, RING.ry, h.a0, h.a1, RING.w + 6, A(0.16 * alpha * glow)));
+      h.arr.push(ellipseArcStroke(cx, cy, RING.rx, RING.ry, h.a0, h.a1, RING.w + 6, A(0.16 * alpha * glow)));
     }
-    h.arr.push(ellipseArcStroke(BODY.cx, cy, RING.rx, RING.ry, h.a0, h.a1, RING.w, A(0.9 * alpha)));
+    h.arr.push(ellipseArcStroke(cx, cy, RING.rx, RING.ry, h.a0, h.a1, RING.w, A(0.9 * alpha)));
     if (h === frontHalf) {
       // the head casts a soft shadow onto the near arc where they meet
-      h.arr.push(ellipseArcStroke(BODY.cx, cy, RING.rx, RING.ry, Math.PI * 0.3, Math.PI * 0.7, RING.w, rgba(C.outline, 0.16 * alpha)));
+      h.arr.push(ellipseArcStroke(cx, cy, RING.rx, RING.ry, Math.PI * 0.3, Math.PI * 0.7, RING.w, rgba(C.outline, 0.16 * alpha)));
     }
+  }
+  // end beads: tiny round caps on the ring's leftmost/rightmost points. The
+  // two half-arcs butt exactly there; at display scale the seam can read as
+  // a nick (and the satellite darkens it in passing) — beads close it.
+  for (const side of [-1, 1]) {
+    back.push(ellipse(cx + side * RING.rx, cy, RING.w * 0.78, RING.w * 0.78, () => A(Math.min(1, 0.92 * alpha))));
   }
   if (th != null) {
     const col = satColor || C.gold;
     const isFront = Math.sin(th) >= 0;
     // near pass: bigger and brighter with a short comet trail along the ring;
-    // behind the head: smaller and dimmer so the lap reads as 3D
-    const depth = isFront ? 1.16 : 0.75;
-    const a = alpha * (isFront ? 1 : 0.6);
+    // behind the head: slightly smaller and dimmer so the lap reads as 3D
+    // (kept close to ring size — shrinking too much makes it look detached)
+    const depth = isFront ? 1.16 : 0.92;
+    const a = alpha * (isFront ? 1 : 0.62);
     if (isFront) {
       for (let k = 1; k <= 2; k++) {
         const tt = th - 0.13 * k;
-        const tx = BODY.cx + RING.rx * Math.cos(tt);
+        const tx = cx + RING.rx * Math.cos(tt);
         const ty = cy + RING.ry * Math.sin(tt);
         front.push(ellipse(tx, ty, 3.4 - k, 3.4 - k, () => rgba(col, (0.4 - 0.14 * k) * alpha)));
       }
     }
-    const sx = BODY.cx + RING.rx * Math.cos(th);
+    const sx = cx + RING.rx * Math.cos(th);
     const syy = cy + RING.ry * Math.sin(th);
+    const sr = 4.6 * depth * satScale;
+    // no dark rim on the satellite: riding over the white ring it read as a
+    // bite out of the line each time the dot passed an end bead
     const sat = [
-      ellipse(sx, syy, 8.5, 8.5, () => rgba(col, 0.28 * a * satScale)),
-      ellipse(sx, syy, 4.6 * depth * satScale, 4.6 * depth * satScale, () => rgba(col, a)),
+      ellipse(sx, syy, sr + 4, sr + 4, () => rgba(col, 0.3 * a)),
+      ellipse(sx, syy, sr, sr, () => rgba(col, a)),
       ellipse(sx - 1.2, syy - 1.4, 1.5, 1.7, () => rgba([255, 255, 255], 0.9 * a)),
     ];
     (isFront ? front : back).push(...sat);
@@ -369,21 +399,23 @@ const ANIMS = {
     ];
   } },
 
-  /* 1.6s one-shot: single jump arc, hands up, open mouth, sparkles */
+  /* 1.6s one-shot: single jump arc, hands up, open mouth, sparkles. Jump is
+     capped so the ring's top never leaves the canvas; feet fade as the
+     body leaves the ground (tucked in flight, not pasted on the belly) */
   happy: { frames: 48, build(t) {
     const jump = Math.sin(Math.PI * t);
-    const dy = -46 * jump;
+    const dy = -32 * jump;
     const ring = ringShapes({ dy, th: TAU * t });
     return [
       ...ring.back,
       ...bodyShapes({
-        sy: 1 + 0.1 * jump, sx: 1 - 0.07 * jump, dy,
+        sy: 1 + 0.16 * jump, sx: 1 - 0.12 * jump, dy,
         shadow: 1 - 0.45 * jump,
       }),
-      ...feetShapes({ liftL: 54 * jump, liftR: 54 * jump }),
+      ...feetShapes({ liftL: 34 * jump, liftR: 34 * jump, fade: jump * 1.15 }),
       ...ring.front,
       ...handShapes({
-        dy, l: { dy: -46 * jump, dx: -6 * jump }, r: { dy: -46 * jump, dx: 6 * jump },
+        dy, l: { dy: -30 * jump, dx: -6 * jump }, r: { dy: -30 * jump, dx: 6 * jump },
       }),
       ...faceShapes({ eye: 1, dy, mouth: 'open' }),
       ...plus(254, 56, 9 * jump, 3.4, rgba(C.gold, jump)).flat(),
@@ -431,11 +463,13 @@ const ANIMS = {
     };
     const ring = ringShapes({ dy: bob, th: TAU * t * 0.75, satColor: hex('#ff9d4d') });
     const shapes = [];
-    // wings first so the body overlaps their roots
+    // wings first so the body overlaps their roots; three segments each so
+    // they read as wings, not fins
     for (const side of [-1, 1]) {
       const wy = BODY.cy - 6 + flap * 9;
-      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 8), wy, 17, 6.5, () => hex('#2b2334')));
-      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 20), wy + 5 - flap * 4, 11, 4.5, () => hex('#2b2334')));
+      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 8), wy, 19, 7.5, () => hex('#2b2334')));
+      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 24), wy + 6 - flap * 5, 14, 5.5, () => hex('#2b2334')));
+      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 37), wy + 13 - flap * 9, 9, 4, () => hex('#2b2334')));
     }
     shapes.push(...ring.back);
     shapes.push(rect(BODY.cx - 5, BODY.cy - BODY.ry - 11 + bob, BODY.cx + 5, BODY.cy - BODY.ry + 7 + bob, hex('#6b8f3a')));
@@ -473,7 +507,7 @@ const ANIMS = {
     const bob = 2 * Math.sin(TAU * 2 * t);
     // satellite rocks ±35° around the ring's top, deciding
     const th = -Math.PI / 2 + 0.6 * Math.sin(TAU * t * 1.5);
-    const ring = ringShapes({ dy: bob, th });
+    const ring = ringShapes({ dx: swx, dy: bob, th });
     const shapes = [
       ...ring.back,
       ...bodyShapes({ sy: 1.01, dx: swx, dy: bob }),
@@ -497,7 +531,7 @@ const ANIMS = {
     const bob = Math.abs(Math.sin(TAU * ph)) * 4;
     const swx = 1.5 * Math.sin(TAU * ph);
     const tap = 2 * (Math.sin(TAU * ph * 2) > 0 ? 1 : 0);
-    const ring = ringShapes({ dy: -bob, th: TAU * t / 3 });
+    const ring = ringShapes({ dx: swx, dy: -bob, th: TAU * t / 3 });
     const shapes = [
       rect(42, 112, 112, 160, rgba(hex('#22344d'), 0.96)),
     ];
@@ -515,8 +549,8 @@ const ANIMS = {
     shapes.push(...ring.front);
     shapes.push(...handShapes({
       dx: swx, dy: -bob,
-      // left hand reaches onto the screen and taps; right hand rests
-      l: { dx: -26, dy: -6 - tap }, r: {},
+      // left hand rests on the screen edge and taps; right hand stays put
+      l: { dx: -24, dy: -2 - tap }, r: {},
     }));
     shapes.push(...faceShapes({ eye: 1, dx: swx, dy: -bob, eyeDx: -10, eyeDy: 5, mouth: 'flat' }));
     return shapes;
@@ -526,7 +560,7 @@ const ANIMS = {
      (and the satellite takes its sweet time, too) */
   waiting: { frames: 120, build(t) {
     const swx = 10 * Math.sin(TAU * t);
-    const ring = ringShapes({ th: TAU * t / 3 });
+    const ring = ringShapes({ dx: swx, th: TAU * t / 3 });
     return [
       ...ring.back,
       ...bodyShapes({ dx: swx, shadow: 1 - Math.abs(swx) / 80 }),
@@ -541,7 +575,7 @@ const ANIMS = {
      comet trail, star bursts and falling confetti */
   celebrate: { frames: 48, build(t) {
     const jump = Math.abs(Math.sin(2 * Math.PI * t));
-    const dy = -36 * jump;
+    const dy = -28 * jump;
     const th = TAU * t;
     const shapes = [
       ...ringShapes({ dy, th: th - 0.55, alpha: 0.3, glow: 0 }).back,
@@ -550,13 +584,13 @@ const ANIMS = {
     const ring = ringShapes({ dy, th });
     shapes.push(...ring.back);
     shapes.push(...bodyShapes({
-      sy: 1 + 0.12 * jump, sx: 1 - 0.08 * jump, dy,
+      sy: 1 + 0.14 * jump, sx: 1 - 0.1 * jump, dy,
       shadow: 1 - 0.5 * jump,
     }));
-    shapes.push(...feetShapes({ liftL: 6 * jump, liftR: 6 * jump }));
+    shapes.push(...feetShapes({ liftL: 6 * jump, liftR: 6 * jump, fade: jump * 1.1 }));
     shapes.push(...ring.front);
     shapes.push(...handShapes({
-      dy, l: { dy: -40 * jump, dx: -7 * jump }, r: { dy: -40 * jump, dx: 7 * jump },
+      dy, l: { dy: -34 * jump, dx: -8 * jump }, r: { dy: -34 * jump, dx: 8 * jump },
     }));
     shapes.push(...faceShapes({ eye: 1, dy, mouth: 'open' }));
     shapes.push(...plus(96, 64, 9 * jump, 3.2, rgba(C.gold, jump)).flat());

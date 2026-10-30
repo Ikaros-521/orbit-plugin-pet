@@ -1,12 +1,12 @@
 {
   "id": "orbitian",
   "name": { "zh": "小轨", "en": "Orbitian" },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Ikaros-521",
   "license": "MIT",
   "credit": {
-    "zh": "Orbit Toolbox 原创吉祥物，程序化生成的示例宠物包",
-    "en": "Original Orbit Toolbox mascot — procedurally generated sample pack"
+    "zh": "Orbit Toolbox 原创吉祥物「小轨」：头顶轨道环的小星灵，程序化生成的示例宠物包",
+    "en": "Original Orbit Toolbox mascot \"Orbitian\" — a little moon-spirit wearing an orbital ring; procedurally generated sample pack"
   },
   "canvas": { "w": 320, "h": 180 },
   "bubbleAnchor": { "x": 0.5 },

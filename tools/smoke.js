@@ -77,12 +77,13 @@ app.whenReady().then(async () => {
   if (!state.pack.anims.includes('idle') || !state.pack.anims.includes('walk')) fail('pack anims wrong: ' + state.pack.anims);
   if (!state.visible) fail('pet did not auto-show after activate');
   if (manager.windowsOf('desktop-pet').length !== 1) fail('sprite window not created');
-  // window = video canvas (240×9/16=135) + bubble margin (120) => 255.
+  // window = video canvas (240 + 30% horizontal slack = 312 wide; video
+  // centers at 240) × 9/16 = 135 + bubble margin (120) => 312x255.
   // Tolerance = the Win10 invisible resize border on transparent windows
   // (~8 physical px, DPI-dependent once it lands in DIP measurements).
   const [w0, h0] = manager.windowsOf('desktop-pet')[0].getContentSize();
-  if (Math.abs(w0 - 240) > 4 || Math.abs(h0 - 255) > 4) fail(`sprite window ${w0}x${h0}, expected 240x255`);
-  ok(`pack=${state.pack.id} anims=[${state.pack.anims}] window 240x${h0} (margin included)`);
+  if (Math.abs(w0 - 312) > 4 || Math.abs(h0 - 255) > 4) fail(`sprite window ${w0}x${h0}, expected 312x255`);
+  ok(`pack=${state.pack.id} anims=[${state.pack.anims}] window ${w0}x${h0} (slack+margin included)`);
 
   /* --- wait for real video decoding inside the sprite window --------------- */
   let st = null;
@@ -369,8 +370,9 @@ app.whenReady().then(async () => {
     fail('setPrefs not applied: ' + JSON.stringify(st3.prefs));
   }
   const [w, h] = manager.windowsOf('desktop-pet')[0].getContentSize();
-  // 320 -> video 180 + margin 160 = 340 (DWM rounds transparent bounds ±1)
-  if (Math.abs(w - 320) > 4 || Math.abs(h - 340) > 4) fail(`window not resized to 320x340, got ${w}x${h}`);
+  // 320 + 30% slack = 416 wide; video 180 + margin 160 = 340 tall
+  // (DWM rounds transparent bounds ±1)
+  if (Math.abs(w - 416) > 4 || Math.abs(h - 340) > 4) fail(`window not resized to 416x340, got ${w}x${h}`);
   ok('setPrefs: size 320 & voice settings applied to window');
 
   /* --- toggle ------------------------------------------------------------------ */

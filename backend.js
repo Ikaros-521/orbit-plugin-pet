@@ -413,7 +413,11 @@ module.exports = {
     const marginH = size => Math.round(size * 0.5);
     const winSize = size => {
       const canvas = pack.cfg.canvas || { w: 320, h: 180 }; // live: pack swaps at runtime
-      return { width: Math.round(size), height: Math.round(size * canvas.h / canvas.w) + marginH(size) };
+      // 30% horizontal slack: the v2 mascot's ring and glow span wider than
+      // the old body, and users read a tight window edge as clipping the ring
+      // even when the video fits. The video centers via object-fit contain,
+      // so the sprite scale is unchanged — the window just breathes wider.
+      return { width: Math.round(size * 1.3), height: Math.round(size * canvas.h / canvas.w) + marginH(size) };
     };
 
     /* Single funnel for every window move/resize: clamp into a display, drop
@@ -720,16 +724,14 @@ module.exports = {
       let open = 0;
       try {
         const data = await ctx.callPlugin('memo', 'list');
-        if (data && data.stats && typeof data.stats.totalOpen === 'number') {
-          open = data.stats.totalOpen;
+        // Mirror memo's own 待办 badge: only the dedicated todo list counts.
+        // totalOpen also adds note-embedded "- [ ]" checkbox tasks (the welcome
+        // note ships with one), which reads as phantom todos next to memo's UI.
+        if (data && data.stats && typeof data.stats.openTodos === 'number') {
+          open = data.stats.openTodos;
         } else {
           for (const t of (data && Array.isArray(data.todos) ? data.todos : [])) {
             if (!t.done && !t.completed) open++;
-          }
-          for (const n of (data && Array.isArray(data.notes) ? data.notes : [])) {
-            for (const line of String(n.content || '').split('\n')) {
-              if (/^\s*[-*+]\s+\[ \]/.test(line)) open++;
-            }
           }
         }
       } catch { /* memo disabled or gone — badge sleeps quietly */ }
@@ -765,8 +767,8 @@ module.exports = {
     }
 
     function handleMemoTodoDone(doneInfo) {
-      if (doneInfo && doneInfo.stats && typeof doneInfo.stats.totalOpen === 'number') {
-        tasksState.count = doneInfo.stats.totalOpen;
+      if (doneInfo && doneInfo.stats && typeof doneInfo.stats.openTodos === 'number') {
+        tasksState.count = doneInfo.stats.openTodos;
         send('tasks', { count: tasksState.count });
         pushState();
       } else {
@@ -787,9 +789,9 @@ module.exports = {
     }
 
     function handleMemoChanged(payload) {
-      if (payload && payload.stats && typeof payload.stats.totalOpen === 'number') {
-        if (tasksState.count !== payload.stats.totalOpen) {
-          tasksState.count = payload.stats.totalOpen;
+      if (payload && payload.stats && typeof payload.stats.openTodos === 'number') {
+        if (tasksState.count !== payload.stats.openTodos) {
+          tasksState.count = payload.stats.openTodos;
           send('tasks', { count: tasksState.count });
           pushState();
         }
