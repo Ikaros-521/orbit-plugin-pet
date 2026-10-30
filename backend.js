@@ -807,6 +807,16 @@ module.exports = {
       ipcMain.on(ch, fn);
       return () => ipcMain.removeListener(ch, fn);
     };
+    // zh labels for the Actions submenu; unmapped anim names show raw
+    const ANIM_ZH = {
+      idle: '待机', walk: '走路', happy: '开心', sleep: '睡觉', click: '点击',
+      drag: '拖拽', fall: '坠落', jump: '跳跃', sit: '坐下', run: '奔跑',
+      dance: '跳舞', sing: '唱歌', eat: '吃东西', wave: '挥手', greet: '打招呼',
+      laugh: '大笑', smile: '微笑', angry: '生气', cry: '哭泣', shy: '害羞',
+      thinking: '思考', working: '工作', waiting: '等待', celebrate: '庆祝',
+      error: '出错', halloween: '万圣节',
+    };
+    const animMenuLabel = name => `▶ ${ANIM_ZH[name] ? `${ANIM_ZH[name]} / ` : ''}${name}`;
     const offs = [
       on('ready', e => {
         try {
@@ -855,11 +865,11 @@ module.exports = {
       on('context-menu', () => {
         const animItems = pack.engine === 'live2d'
           ? live2dKeys().filter(k => k !== 'walk').map(name => ({
-              label: `▶ ${name}`,
+              label: animMenuLabel(name),
               click: () => send('play', { anim: name, playbackId: null }),
             }))
           : activeAnims().filter(a => a.role !== 'walk').map(a => ({
-              label: `▶ ${a.name}`,
+              label: animMenuLabel(a.name),
               click: () => send('play', { anim: a.name, once: a.once !== false, playbackId: null }),
             }));
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
