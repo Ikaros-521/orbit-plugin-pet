@@ -70,7 +70,12 @@ app.whenReady().then(async () => {
   if (!state.pack.anims.includes('idle') || !state.pack.anims.includes('walk')) fail('pack anims wrong: ' + state.pack.anims);
   if (!state.visible) fail('pet did not auto-show after activate');
   if (manager.windowsOf('desktop-pet').length !== 1) fail('sprite window not created');
-  ok(`pack=${state.pack.id} anims=[${state.pack.anims}] window visible`);
+  // window = video canvas (240×9/16=135) + bubble margin (120) => 255.
+  // Tolerance = the Win10 invisible resize border on transparent windows
+  // (~8 physical px, DPI-dependent once it lands in DIP measurements).
+  const [w0, h0] = manager.windowsOf('desktop-pet')[0].getContentSize();
+  if (Math.abs(w0 - 240) > 4 || Math.abs(h0 - 255) > 4) fail(`sprite window ${w0}x${h0}, expected 240x255`);
+  ok(`pack=${state.pack.id} anims=[${state.pack.anims}] window 240x${h0} (margin included)`);
 
   /* --- wait for real video decoding inside the sprite window --------------- */
   let st = null;
@@ -90,6 +95,23 @@ app.whenReady().then(async () => {
   const st2 = (await manager.call('desktop-pet', 'getState')).status;
   if (st2.anim !== 'happy' && st2.anim === 'idle') { /* already returned to idle — also fine */ }
   ok(`one-shot happy dispatched (anim now: ${st2.anim})`);
+
+  /* --- quip -> bubble round-trip ------------------------------------------ */
+  const q = await manager.call('desktop-pet', 'quip');
+  if (!q.ok || !q.text) fail('quip: ' + JSON.stringify(q));
+  let bubbled = false;
+  for (let i = 0; i < 12; i++) {
+    await sleep(400);
+    const s = (await manager.call('desktop-pet', 'getState')).status;
+    if (s && s.bubble) { bubbled = true; break; }
+  }
+  if (!bubbled) fail('bubble never showed after quip');
+  ok(`quip bubbled: "${q.text.slice(0, 16)}" -> renderer status.bubble=true`);
+  await manager.call('desktop-pet', 'setPrefs', { bubbleOn: false });
+  const q2 = await manager.call('desktop-pet', 'quip');
+  if (q2.ok) fail('quip should refuse when bubble is off');
+  await manager.call('desktop-pet', 'setPrefs', { bubbleOn: true });
+  ok('bubbleOn gate respected');
 
   /* --- drag & toss simulation --------------------------------------------------
      Synthetic PointerEvents with explicit screenX keep the velocity samples
@@ -139,10 +161,10 @@ app.whenReady().then(async () => {
   await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });
   const st3 = await manager.call('desktop-pet', 'getState');
   if (st3.prefs.size !== 320 || st3.prefs.autoWalk !== false) fail('setPrefs not applied: ' + JSON.stringify(st3.prefs));
-  const [w, h] = manager.windowsOf('desktop-pet')[0].getSize();
-  // DWM rounds transparent frameless bounds by ±1 — contain-fit hides it
-  if (Math.abs(w - 320) > 1 || Math.abs(h - 180) > 1) fail(`window not resized to 320x180, got ${w}x${h}`);
-  ok('setPrefs: size 320 applied to window');
+  const [w, h] = manager.windowsOf('desktop-pet')[0].getContentSize();
+  // 320 -> video 180 + margin 160 = 340 (DWM rounds transparent bounds ±1)
+  if (Math.abs(w - 320) > 4 || Math.abs(h - 340) > 4) fail(`window not resized to 320x340, got ${w}x${h}`);
+  ok('setPrefs: size 320 applied to window (margin scaled too)');
 
   /* --- toggle ------------------------------------------------------------------ */
   const t1 = await manager.call('desktop-pet', 'toggle');

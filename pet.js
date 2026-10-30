@@ -331,14 +331,71 @@
     clearTimeout(idleTimer);
   }
 
+  /* --- bubble & voice -------------------------------------------------------- */
+
+  let marginH = 0;
+  const bubble = document.getElementById('bubble');
+  let bubbleVisible = false;
+  let bubbleTimer = 0;
+
+  function applyMargin() {
+    marginH = prefs.margin || 0;
+    document.documentElement.style.setProperty('--margin', marginH + 'px');
+  }
+
+  const speak = text => {
+    if (!prefs.voiceOn || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = prefs.lang === 'en' ? 'en-US' : 'zh-CN';
+      u.rate = 0.98;
+      window.speechSynthesis.speak(u);
+    } catch { /* no voice device: bubble only */ }
+  };
+
+  function hideBubble() {
+    if (!bubbleVisible) return;
+    bubbleVisible = false;
+    clearTimeout(bubbleTimer);
+    bubble.classList.remove('on');
+  }
+
+  function showBubble(text) {
+    if (!prefs.bubbleOn || !text || dragging) return; // the user is busy dragging — drop the chatter
+    bubble.textContent = text;
+    bubble.classList.add('on');
+    bubbleVisible = true;
+    clearTimeout(bubbleTimer);
+    bubbleTimer = setTimeout(hideBubble, Math.min(9000, Math.max(2600, text.length * (prefs.lang === 'en' ? 70 : 150))));
+    speak(text);
+  }
+
+  bubble.addEventListener('click', hideBubble);
+
   /* --- click-through -------------------------------------------------------- */
 
-  // The whole window ignores the mouse except over the pet; `forward` keeps
-  // enter/leave firing so the toggle stays in sync.
-  let bodyHover = false;
-  const setIgnore = on => { if (!dragging) window.pet.setIgnore(on && !bodyHover); };
-  stage.addEventListener('mouseenter', () => { bodyHover = true; window.pet.setIgnore(false); });
-  stage.addEventListener('mouseleave', () => { bodyHover = false; setIgnore(true); });
+  /* The window stays transparent to the mouse except over the pet body (the
+     video area below the bubble margin) or a visible bubble. With forward:true
+     the page still receives mousemove while transparent, so this one handler
+     owns both directions of the toggle — no reliance on enter/leave edges,
+     and the empty bubble strip never swallows clicks. */
+  let ignoring = null;
+  function overBody(x, y) {
+    if (bubbleVisible) {
+      const r = bubble.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+    }
+    return y >= marginH;
+  }
+  window.addEventListener('mousemove', e => {
+    if (dragging) return; // pointer capture owns the mouse during drags
+    const wantIgnore = !overBody(e.clientX, e.clientY);
+    if (wantIgnore !== ignoring) {
+      ignoring = wantIgnore;
+      window.pet.setIgnore(wantIgnore);
+    }
+  });
 
   /* --- status heartbeat (tests / future companions read this via the panel) - */
 
@@ -356,7 +413,7 @@
       t: el ? Math.round(el.currentTime * 100) / 100 : 0,
       ready: el ? el.readyState : 0,
       x: Math.round(shadowX), y: Math.round(shadowY),
-      walking, airborne,
+      walking, airborne, bubble: bubbleVisible,
     });
   }, 700);
 
@@ -369,7 +426,7 @@
     switchTo(first.name, false, null);
     scheduleIdle();
     scheduleWalk();
-    setIgnore(true); // transparent until the cursor meets the pet
+    window.pet.setIgnore(true); ignoring = true; // transparent until the cursor meets the pet
   }
 
   window.pet.onInit(init => {
@@ -377,9 +434,20 @@
     assetBase = init.assetBase;
     prefs = { ...prefs, ...init.prefs };
     displays = init.displays || [];
+    applyMargin();
+    if (cfg.bubbleAnchor && Number.isFinite(cfg.bubbleAnchor.x)) {
+      bubble.style.left = Math.round(Math.min(1, Math.max(0, cfg.bubbleAnchor.x)) * 100) + '%';
+    }
     start();
   });
-  window.pet.onPrefs(p => { prefs = { ...prefs, ...p }; });
+  window.pet.onPrefs(p => {
+    const prevMargin = prefs.margin;
+    prefs = { ...prefs, ...p };
+    if (p.margin !== undefined && p.margin !== prevMargin) applyMargin();
+    if (p.bubbleOn === false) hideBubble();
+    if (p.voiceOn === false && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+  });
+  window.pet.onBubble(({ text } = {}) => showBubble(text));
   window.pet.onPlay(({ anim, once }) => {
     stopLoops();
     switchTo(anim, once, () => { idle(); scheduleIdle(); scheduleWalk(); });

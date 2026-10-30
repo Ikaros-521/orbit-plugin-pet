@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('pet', {
   contextMenu: () => ipcRenderer.send(`${P}context-menu`),
   onInit: fn => ipcRenderer.on(`${P}init`, (_e, payload) => fn(payload)),
   onPrefs: fn => ipcRenderer.on(`${P}prefs`, (_e, payload) => fn(payload)),
+  onBubble: fn => ipcRenderer.on(`${P}bubble`, (_e, payload) => fn(payload)),
   onPlay: fn => ipcRenderer.on(`${P}play`, (_e, payload) => fn(payload)),
   onDisplays: fn => ipcRenderer.on(`${P}displays`, (_e, payload) => fn(payload)),
 });

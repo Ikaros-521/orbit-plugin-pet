@@ -57,6 +57,20 @@
               <span class="dpet-row-label">${LABELS.autoWalk()}</span>
               <span class="dpet-hint">${LABELS.autoWalkHint()}</span>
             </label>
+            <label class="dpet-row dpet-check">
+              <input class="dpet-bubble" type="checkbox" />
+              <span class="dpet-row-label">${t('气泡碎碎念', 'Chatter bubble')}</span>
+              <span class="dpet-hint">${t('空闲时冒一句话', 'Occasional spoken bubbles')}</span>
+            </label>
+            <label class="dpet-row dpet-check">
+              <input class="dpet-voice" type="checkbox" />
+              <span class="dpet-row-label">${t('语音朗读', 'Read aloud')}</span>
+              <span class="dpet-hint">${t('用系统声音念出气泡', 'System voice speaks bubbles')}</span>
+            </label>
+            <div class="dpet-row">
+              <button type="button" class="dpet-quip btn ghost small">${t('说一句', 'Say something')}</button>
+              <span class="dpet-quip-result"></span>
+            </div>
             <div class="dpet-row">
               <button type="button" class="dpet-reset btn ghost small"></button>
             </div>
@@ -74,6 +88,8 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
+        bubble: $('.dpet-bubble'), voice: $('.dpet-voice'),
+        quip: $('.dpet-quip'), quipResult: $('.dpet-quip-result'),
         anim: $('.dpet-anim'), credit: $('.dpet-credit'), derived: $('.dpet-derived'),
       };
 
@@ -104,6 +120,8 @@
         if (els.pack.selectedOptions[0]) els.pack.selectedOptions[0].selected = true;
 
         els.walk.checked = !!prefs.autoWalk;
+        els.bubble.checked = !!prefs.bubbleOn;
+        els.voice.checked = !!prefs.voiceOn;
 
         if (status && Number.isFinite(status.x)) {
           els.anim.textContent = `${LABELS.pos()}: ${status.x}, ${status.y}`;
@@ -127,6 +145,13 @@
       els.size.addEventListener('change', () => { call('setPrefs', { size: Number(els.size.value) }); });
       els.pack.addEventListener('change', () => { call('setPrefs', { pack: els.pack.value }); });
       els.walk.addEventListener('change', () => { call('setPrefs', { autoWalk: els.walk.checked }); });
+      els.bubble.addEventListener('change', () => { call('setPrefs', { bubbleOn: els.bubble.checked }); });
+      els.voice.addEventListener('change', () => { call('setPrefs', { voiceOn: els.voice.checked }); });
+      els.quip.addEventListener('click', async () => {
+        const res = await call('quip');
+        const d = res && res.ok ? res.data : { ok: false, error: res && res.error };
+        els.quipResult.textContent = d.ok ? `“${d.text}”` : `⚠ ${d.error || ''}`;
+      });
       els.reset.addEventListener('click', () => { call('resetPosition'); });
       els.reset.textContent = LABELS.resetPos();
 
@@ -136,6 +161,7 @@
 
       /* --- boot ---------------------------------------------------------------- */
       (async () => {
+        call('setPrefs', { lang: window.I18N.lang }); // quip pool + voice language follow the UI
         const res = await call('getState');
         state = res && res.ok ? res.data : null;
         if (!state || !state.packs || !state.packs.length) {

@@ -9,6 +9,7 @@
     "en": "Original Orbit Toolbox mascot — procedurally generated sample pack"
   },
   "canvas": { "w": 320, "h": 180 },
+  "bubbleAnchor": { "x": 0.5 },
   "defaultSize": 240,
   "defaultFacing": "right",
   "anims": [

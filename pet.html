@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="pet.css" />
 </head>
 <body>
+  <!-- top margin: bubble lives here; the strip is click-transparent unless a
+       bubble is visible under the cursor (hit-testing lives in pet.js) -->
+  <div id="zone"><div id="bubble"></div></div>
   <div id="stage">
     <!-- A/B double buffer: the incoming animation loads and starts in the
          back element, then the buffers swap — transitions never flash. -->

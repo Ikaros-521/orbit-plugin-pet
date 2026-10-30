@@ -30,6 +30,9 @@ module.exports = {
       size: 240,
       visible: true,
       autoWalk: true,
+      bubbleOn: true,
+      voiceOn: false,
+      lang: null,          // panel fills 'zh' | 'en' from the host UI language
       x: null,
       y: null,
       ...ctx.data.get(),
@@ -75,8 +78,11 @@ module.exports = {
     let lastBoundsKey = null; // "x,y,w,h": the renderer pumps up to 60 moves/s
     let lastBoundsAt = 0;     // watchdog stays off while moves are flowing
 
-    const canvas = pack.cfg.canvas || { w: 320, h: 180 };
-    const winSize = size => ({ width: Math.round(size), height: Math.round(size * canvas.h / canvas.w) });
+    const marginH = size => Math.round(size * 0.5);
+    const winSize = size => {
+      const canvas = pack.cfg.canvas || { w: 320, h: 180 }; // live: pack swaps at runtime
+      return { width: Math.round(size), height: Math.round(size * canvas.h / canvas.w) + marginH(size) };
+    };
 
     /* Single funnel for every window move/resize: clamp into a display, drop
        duplicates, and take the cheap setPosition path when only x/y changed
@@ -178,11 +184,59 @@ module.exports = {
     const stateFor = () => ({
       pack: { id: pack.id, name: pack.cfg.name || pack.id, version: pack.cfg.version || '0.0.0', author: pack.cfg.author || '', credit: pack.cfg.credit || null, anims: pack.cfg.anims.map(a => a.name) },
       packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id })),
-      prefs: { pack: pack.id, size: prefs.size, visible: prefs.visible, autoWalk: prefs.autoWalk },
+      prefs: { pack: pack.id, ...prefsPayload() },
       visible: !!(petWin && !petWin.isDestroyed() && petWin.isVisible()),
       status: lastStatus,
     });
     const pushState = () => ctx.send('state', stateFor());
+    const prefsPayload = () => ({
+      size: prefs.size, autoWalk: prefs.autoWalk, bubbleOn: prefs.bubbleOn,
+      voiceOn: prefs.voiceOn, lang: prefs.lang, margin: marginH(prefs.size),
+    });
+
+    /* --- quips (local chatter) ---------------------------------------------- */
+
+    const QUIPS = {
+      zh: [
+        '喝口水吧，一直盯着屏幕', '伸个懒腰？我陪你', '窗外天气好像变了',
+        '我刚刚学会一个新动作', '偷偷告诉你：我在摸鱼', '工作别太拼，劳逸结合',
+        '你今天敲的代码比我还多', '数到三，我们一起休息十分钟', '其实我只是一只小团子',
+        '别卷啦，我都要睡着了', '坐久了记得站起来晃晃', '有没有想我呀',
+        '刚才那段跑对了吗', '我猜你在憋个大招', '认真的样子最好看',
+        '要不要听个笑话？算了，下次吧', '桌面右上角被我承包了', '累了就眨眨眼，陪我发会儿呆',
+      ],
+      en: [
+        'Hydrate! You have been staring too long', 'Stretch time, I will wait for you',
+        'The weather outside looks different', 'I just learned a new move',
+        'Secret: I was slacking off too', 'Work-life balance, remember?',
+        'You typed more code than me today', 'Count to three, then ten minutes off',
+        'I am just a small dumpling really', 'Stop grinding, I am falling asleep',
+        'Stand up and wiggle around a bit', 'Did you miss me?',
+        'Did that run pass? Fingers crossed', 'I bet you are cooking something big',
+        'Focus mode looks good on you', 'Want a joke? Maybe next time',
+        'Top-right corner is mine now', 'Blink a few times and zone out with me',
+      ],
+    };
+    const pickQuip = () => {
+      const lang = prefs.lang === 'en' ? 'en' : 'zh';
+      const pool = QUIPS[lang];
+      return pool[Math.floor(Math.random() * pool.length)];
+    };
+    let quipTimer = null;
+    const sendQuip = (text) => {
+      if (!prefs.bubbleOn) return { ok: false, error: 'bubble is off' };
+      const rt = petWin && !petWin.isDestroyed() && petWin.isVisible();
+      if (!rt) return { ok: false, error: 'pet is hidden' };
+      const body = typeof text === 'string' && text.trim() ? text.trim().slice(0, 200) : pickQuip();
+      send('bubble', { text: body });
+      return { ok: true, text: body };
+    };
+    const scheduleQuip = () => {
+      clearTimeout(quipTimer);
+      quipTimer = setTimeout(() => { sendQuip(); scheduleQuip(); }, 180000 + Math.random() * 240000);
+      quipTimer.unref?.();
+    };
+    scheduleQuip();
 
     /* --- sprite-window ipc --------------------------------------------------- */
 
@@ -198,7 +252,7 @@ module.exports = {
             pack: pack.cfg,
             packDir: pack.dirName,
             assetBase: `plugin://${ctx.id}/pets/${pack.dirName}/`,
-            prefs: { size: prefs.size, autoWalk: prefs.autoWalk, visible: prefs.visible },
+            prefs: prefsPayload(),
             displays: displays(),
           });
         } catch { /* window torn down mid-handshake */ }
@@ -222,6 +276,16 @@ module.exports = {
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
         Menu.buildFromTemplate([
           ...animItems,
+          { type: 'separator' },
+          { label: '说一句 / Say something', click: () => sendQuip() },
+          {
+            label: (prefs.bubbleOn ? '关闭气泡' : '开启气泡') + ' / Bubble',
+            click: () => { prefs.bubbleOn = !prefs.bubbleOn; savePrefs(); send('prefs', prefsPayload()); pushState(); },
+          },
+          {
+            label: (prefs.voiceOn ? '关闭朗读' : '开启朗读') + ' / Voice',
+            click: () => { prefs.voiceOn = !prefs.voiceOn; savePrefs(); send('prefs', prefsPayload()); pushState(); },
+          },
           { type: 'separator' },
           { label: toggleLabel, click: () => { api.toggle(); } },
           { label: '宠物设置 / Pet settings', click: () => openHostPanel() },
@@ -254,6 +318,9 @@ module.exports = {
       setPrefs: (args = {}) => {
         let reload = false;
         if (typeof args.autoWalk === 'boolean') prefs.autoWalk = args.autoWalk;
+        if (typeof args.bubbleOn === 'boolean') prefs.bubbleOn = args.bubbleOn;
+        if (typeof args.voiceOn === 'boolean') prefs.voiceOn = args.voiceOn;
+        if (args.lang === 'zh' || args.lang === 'en') prefs.lang = args.lang;
         if (typeof args.size === 'number' && args.size >= 120 && args.size <= 480 && args.size !== prefs.size) {
           prefs.size = Math.round(args.size);
           if (petWin && !petWin.isDestroyed()) {
@@ -274,11 +341,12 @@ module.exports = {
           petWin = null;
           ensureWindow();
         } else {
-          send('prefs', { size: prefs.size, autoWalk: prefs.autoWalk });
+          send('prefs', prefsPayload());
         }
         pushState();
         return { ok: true };
       },
+      quip: (args = {}) => sendQuip(args && args.text),
       play: (args = {}) => {
         if (!args.anim) return { ok: false, error: 'anim required' };
         if (!pack.cfg.anims.some(a => a.name === args.anim)) return { ok: false, error: 'unknown anim' };
@@ -319,6 +387,7 @@ module.exports = {
 
     teardown = () => {
       clearTimeout(savePosTimer);
+      clearTimeout(quipTimer);
       clearInterval(topmostTimer);
       screen.removeListener('display-metrics-changed', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);
