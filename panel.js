@@ -259,26 +259,6 @@
         const st = await call('getState');
         if (st && st.ok) { state = st.data; render(); }
       });
-      els.pack.addEventListener('change', async () => {
-        const res = await call('setPrefs', { pack: els.pack.value });
-        const d = res && res.ok ? res.data : null;
-        if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
-      });
-      els.model.addEventListener('click', async () => {
-        const pick = await call('chooseModelDir');
-        const dir = pick && pick.ok && pick.data && pick.data.dir;
-        if (!dir) return;
-        const res = await call('setPrefs', { modelDir: dir });
-        const d = res && res.ok ? res.data : null;
-        if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
-        const st = await call('getState');
-        if (st && st.ok) { state = st.data; render(); }
-      });
-      els.modelUnbind.addEventListener('click', async () => {
-        await call('setPrefs', { modelDir: null });
-        const st = await call('getState');
-        if (st && st.ok) { state = st.data; render(); }
-      });
       els.walk.addEventListener('change', () => { call('setPrefs', { autoWalk: els.walk.checked }); });
       els.bubble.addEventListener('change', () => { call('setPrefs', { bubbleOn: els.bubble.checked }); });
       let previewAudio = null;
