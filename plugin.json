@@ -1,19 +1,41 @@
 {
   "id": "desktop-pet",
-  "name": { "zh": "桌宠", "en": "Desktop Pet" },
+  "name": {
+    "zh": "桌宠",
+    "en": "Desktop Pet"
+  },
   "desc": {
     "zh": "一只住在桌面上的透明小宠物：待机呼吸、随机溜达、点击 Q 弹、可拖拽甩抛，支持宠物包扩展",
     "en": "A transparent desktop companion — idles, wanders, squashes on click, draggable & tossable. Pet packs supported"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "category": "other",
   "author": "Ikaros-521",
-  "keywords": ["pet", "desktop", "companion", "mascot", "桌宠", "宠物", "吉祥物"],
+  "keywords": [
+    "pet",
+    "desktop",
+    "companion",
+    "mascot",
+    "桌宠",
+    "宠物",
+    "吉祥物"
+  ],
   "icon": "icon.svg",
   "defaultEnabled": true,
   "backend": "backend.js",
-  "panel": { "script": "panel.js", "style": "panel.css" },
+  "panel": {
+    "script": "panel.js",
+    "style": "panel.css"
+  },
   "actions": [
-    { "id": "toggle", "label": { "zh": "显示 / 隐藏桌宠", "en": "Toggle pet" }, "method": "toggle", "hotkey": null }
+    {
+      "id": "toggle",
+      "label": {
+        "zh": "显示 / 隐藏桌宠",
+        "en": "Toggle pet"
+      },
+      "method": "toggle",
+      "hotkey": null
+    }
   ]
 }

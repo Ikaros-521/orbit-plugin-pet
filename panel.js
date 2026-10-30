@@ -26,7 +26,8 @@
 
   window.Toolbox.panel({
     mount(root) {
-      root.className = 'dpet-root';
+      // keep the host's panel-view base class (shared rules key off it)
+      root.classList.add('dpet-root');
       let state = null;
 
       /* --- markup ---------------------------------------------------------- */
@@ -38,7 +39,7 @@
               <div class="dpet-hero-name"></div>
               <div class="dpet-hero-status"></div>
             </div>
-            <button class="dpet-toggle"></button>
+            <button type="button" class="dpet-toggle btn small"></button>
           </div>
 
           <section class="dpet-group">
@@ -49,7 +50,7 @@
             </label>
             <label class="dpet-row">
               <span class="dpet-row-label">${LABELS.pack()}</span>
-              <select class="dpet-pack"></select>
+              <select class="dpet-pack input"></select>
             </label>
             <label class="dpet-row dpet-check">
               <input class="dpet-walk" type="checkbox" />
@@ -57,7 +58,7 @@
               <span class="dpet-hint">${LABELS.autoWalkHint()}</span>
             </label>
             <div class="dpet-row">
-              <button class="dpet-reset"></button>
+              <button type="button" class="dpet-reset btn ghost small"></button>
             </div>
           </section>
 
@@ -87,7 +88,6 @@
           ? `${LABELS.nowPlaying()}: ${status && status.anim ? status.anim : '…'}`
           : LABELS.resting();
         els.toggle.textContent = visible ? LABELS.hideBtn() : LABELS.showBtn();
-        els.toggle.classList.toggle('on', !!visible);
         els.art.style.backgroundImage = 'url(plugin://desktop-pet/icon.svg)';
 
         if (els.size.value !== String(prefs.size)) els.size.value = prefs.size;
