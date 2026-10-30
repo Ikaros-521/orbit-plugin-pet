@@ -219,38 +219,61 @@ app.whenReady().then(async () => {
   if (!inSeason && hwn.error !== 'unknown anim') fail('out-of-season anim must be hidden: ' + JSON.stringify(hwn));
   ok(`season gate (${inSeason ? 'October: halloween in pool' : 'off-season: halloween hidden'})`);
 
-  /* off-by-a-level model dir picks auto-correct to the real root ------------- */
+  /* --- model library: auto-discovery, inference, override, removal ---------- */
   {
-    const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'l2d-root-'));
-    fs.mkdirSync(path.join(fake, 'model'), { recursive: true });
-    fs.writeFileSync(path.join(fake, 'model', 'cat.model3.json'), '{}'); // same tail as the angel pack
-    const deep = path.join(fake, 'model', 'demomodel.1024');
-    fs.mkdirSync(deep, { recursive: true });
-    const rFix = await manager.call('desktop-pet', 'setPrefs', { modelDir: deep });
-    const stFix = await manager.call('desktop-pet', 'getState');
-    if (!rFix.ok || stFix.modelDir !== fake) {
-      fail(`deep pick should normalize to ${fake}, got ${stFix.modelDir} (${JSON.stringify(rFix)})`);
-    }
-    const angelFix = stFix.packs.find(p => p.id === 'ikaros-angel');
-    if (angelFix.needsModel) fail('needsModel must clear after normalization');
-    await manager.call('desktop-pet', 'setPrefs', { modelDir: null }); // explicit unbind for the degradation checks below
-    const stUnbound = await manager.call('desktop-pet', 'getState');
-    if (stUnbound.packs.find(p => p.id === 'ikaros-angel').needsModel !== true) fail('unbind must restore needsModel');
-    ok('model dir pick normalizes up from wrong subfolder (and unbind restores needsModel)');
-  }
+    // isolate from the tester machine's real ~/OrbitPet/models library
+    const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'l2d-lib-'));
+    await manager.call('desktop-pet', 'setPrefs', { modelDirs: [lib] });
+    let stL = await manager.call('desktop-pet', 'getState');
+    if (!stL.packs.find(p => p.id === 'ikaros-angel').needsModel) fail('angel must be needsModel against an empty library');
 
-  /* --- live2d pack gracefully degrades without a model dir ---------------------- */
-  const angelEntry = (state.packs || []).find(p => p.id === 'ikaros-angel');
-  if (!angelEntry || angelEntry.engine !== 'live2d' || !angelEntry.needsModel) {
-    fail('live2d pack must list engine+needsModel when unbound: ' + JSON.stringify(state.packs));
+    // drop a model folder into the library — discovered with no config anywhere
+    const girl = path.join(lib, 'Tester');
+    fs.mkdirSync(path.join(girl, 'textures'), { recursive: true });
+    fs.writeFileSync(path.join(girl, 'm.moc3'), 'fake');
+    fs.writeFileSync(path.join(girl, 'textures', 't0.png'),
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAF0lEQVR42mP8z8Dwn4GBwZiBgZGAAQAXmQLqae6R2QAAAABJRU5ErkJggg==', 'base64'));
+    fs.writeFileSync(path.join(girl, 'tester.model3.json'), JSON.stringify({
+      FileReferences: {
+        Moc: 'm.moc3',
+        Textures: ['textures/t0.png'],
+        Expressions: [{ Name: 'happy', File: 'e.exp3.json' }],
+        Motions: { Idle: [{ File: 'a.motion3.json' }, { File: 'b.motion3.json' }], Tap: [{ File: 'a.motion3.json' }], Waiting: [{ File: 'b.motion3.json' }] },
+      },
+    }));
+    const rs = await manager.call('desktop-pet', 'rescan');
+    if (!rs.ok) fail('rescan: ' + JSON.stringify(rs));
+    stL = await manager.call('desktop-pet', 'getState');
+    const autoGirl = stL.packs.find(p => p.id === 'auto-tester');
+    if (!autoGirl || !autoGirl.auto || autoGirl.needsModel) fail('auto pack not discovered: ' + JSON.stringify(stL.packs));
+    ok('model library auto-discovers dropped folders');
+
+    // activate it (fake moc — renderer load will fail, backend contract is what we assert)
+    await manager.call('desktop-pet', 'setPrefs', { pack: 'auto-tester' });
+    const pWork = await manager.call('desktop-pet', 'play', { anim: 'working' });
+    if (pWork.ok) fail('no work-ish group in fixture; working must be rejected: ' + JSON.stringify(pWork));
+    const pClick = await manager.call('desktop-pet', 'play', { anim: 'click' });
+    if (!pClick.ok || !pClick.playbackId) fail('Tap group should map to click: ' + JSON.stringify(pClick));
+
+    // pet.json beside the model refines the inference
+    fs.writeFileSync(path.join(girl, 'pet.json'), JSON.stringify({ name: { zh: '测试姬', en: 'Tester-san' }, live2d: { working: { group: 'Waiting', index: 0 } } }));
+    await manager.call('desktop-pet', 'rescan');
+    stL = await manager.call('desktop-pet', 'getState');
+    if (stL.packs.find(p => p.id === 'auto-tester').name.zh !== '测试姬') fail('override name not merged');
+    const pWork2 = await manager.call('desktop-pet', 'play', { anim: 'working' });
+    if (!pWork2.ok) fail('pet.json override mapping not applied: ' + JSON.stringify(pWork2));
+    ok('folder pet.json overrides inferred mapping');
+
+    // duplicate add of a normalized/raw dir collapses; removal falls back safely
+    const stAdd = await manager.call('desktop-pet', 'setPrefs', { addModelDir: girl });
+    const stL2 = await manager.call('desktop-pet', 'getState');
+    if (stL2.modelDirs.filter(d => d.toLowerCase().replace(/\/+$/, '') === girl.toLowerCase().replace(/\/+$/, '')).length > 1) fail('dup dirs: ' + JSON.stringify(stL2.modelDirs));
+    await manager.call('desktop-pet', 'setPrefs', { modelDirs: [stL2.modelLibrary] });
+    stL = await manager.call('desktop-pet', 'getState');
+    if (stL.packs.some(p => p.id === 'auto-tester')) fail('auto pack should vanish after root removal');
+    if (stL.pack.engine !== 'webm') fail('stage must fall back to a webm pack, got ' + stL.pack.engine);
+    ok('library roots add/dedupe/remove with clean fallback');
   }
-  const sw = await manager.call('desktop-pet', 'setPrefs', { pack: 'ikaros-angel' });
-  if (!sw.packError) fail('switching to unbound live2d pack should return packError: ' + JSON.stringify(sw));
-  const stAfter = await manager.call('desktop-pet', 'getState');
-  if (stAfter.pack.id !== 'orbitian') fail('unbound pack switch must not steal the stage: ' + stAfter.pack.id);
-  const badDir = await manager.call('desktop-pet', 'setPrefs', { modelDir: 'E:/definitely/not/here' });
-  if (badDir.ok) fail('nonexistent model dir must be refused');
-  ok('live2d pack degrades safely without a bound model dir');
 
   /* --- file-drop routing ---------------------------------------------------------- */
   fs.writeFileSync(path.join(tmp, 'drop.json'), '{"hello":"pet"}');

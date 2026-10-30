@@ -40,67 +40,26 @@ module.exports = {
       wfOn: true,          // react to workflow runs with state animations
       tasksOn: true,       // unchecked-todo badge mirrored from memo
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
-      modelDir: null,      // external Live2D model root (never inside the repo)
+      modelDirs: null,     // Live2D roots to scan; null => [default library]
       x: null,
       y: null,
       ...ctx.data.get(),
     };
     const savePrefs = () => ctx.data.set({ ...prefs });
 
-    /* Packs live in pets/<id>/pet.json. Two engines:
-       - webm (default): every anim file must exist, empty pool = skip
-       - live2d: the model itself lives OUTSIDE this repo, in a user-bound
-         directory (prefs.modelDir, served as plugin://…/@models/). A live2d
-         pack still lists itself without a bound dir — flagged needsModel,
-         activated only once a directory is chosen in the panel. */
-    function scanPacks() {
-      const root = path.join(ctx.root, 'pets');
-      const packs = [];
-      let entries = [];
-      try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* no pets dir */ }
-      for (const ent of entries) {
-        if (!ent.isDirectory()) continue;
-        let cfg;
-        try { cfg = JSON.parse(fs.readFileSync(path.join(root, ent.name, 'pet.json'), 'utf8')); }
-        catch { console.warn(`[desktop-pet] pets/${ent.name}: pet.json missing/invalid, skipped`); continue; }
-        const engine = cfg.engine === 'live2d' ? 'live2d' : 'webm';
-        let anims = [];
-        let needsModel = false;
-        if (engine === 'live2d') {
-          needsModel = !(prefs.modelDir && typeof cfg.model === 'string'
-            && fs.existsSync(path.join(prefs.modelDir, cfg.model)));
-        } else {
-          anims = (Array.isArray(cfg.anims) ? cfg.anims : []).filter(a =>
-            a && typeof a.name === 'string' && typeof a.file === 'string'
-            && fs.existsSync(path.join(root, ent.name, a.file)));
-          if (!anims.length) { console.warn(`[desktop-pet] pets/${ent.name}: no playable anims, skipped`); continue; }
-        }
-        packs.push({
-          id: cfg.id || ent.name,
-          dirName: ent.name,
-          engine,
-          needsModel,
-          cfg: { ...cfg, engine, anims },
-        });
-      }
-      return packs;
-    }
+    /* ---- model library: drop folders in, packs come out -----------------------
+       ~/OrbitPet/models is the zero-config home: any folder under a registered
+       root that contains a *.model3.json (depth<=3) becomes a live2d pack with
+       motion/expression mapping INFERRED from group names; a pet.json beside
+       the model file refines anything the guesswork got wrong. Extra roots
+       (an existing model on E:, say) can be added from the panel. The legacy
+       single modelDir auto-migrates into the list. */
+    const MODEL_LIBRARY = path.join(require('os').homedir(), 'OrbitPet', 'models');
 
-    let packs = scanPacks();
-    const packById = id => packs.find(p => p.id === id || p.dirName === id) || null;
-    let pack = packById(prefs.pack) || packs.find(p => !p.needsModel) || packs[0] || null;
-    if (pack && pack.needsModel) {
-      const usable = packs.find(p => !p.needsModel);
-      if (usable) pack = usable; // live2d without a bound dir never steals the stage from a working pack
-    }
-    if (!pack) throw new Error('no pet pack found under pets/');
-
-    /* Users pick folders in a dialog and land one level off surprisingly often
-       (the textures subfolder, the model folder itself...). Given any chosen
-       dir, find the real model ROOT for a live2d pack: try walking up from the
-       pick, then a bounded walk down, matching <root>/<pack.model> exactly. */
-    function normalizeModelDir(dir, p) {
-      const wantTail = String(p.cfg.model).split('/').join(path.sep);
+    function normalizeModelDir(dir, modelRel) {
+      // users pick folders one level off all the time (textures subdir, the
+      // model folder itself): walk up, then bounded-down, for <root>/<modelRel>
+      const wantTail = String(modelRel).split('/').join(path.sep);
       let cur = path.resolve(dir);
       for (let up = 0; up < 5; up++) {
         if (fs.existsSync(path.join(cur, wantTail))) return cur;
@@ -121,22 +80,243 @@ module.exports = {
       }
       return null;
     }
-    function findModelRoot(dir) {
-      for (const p of packs) {
-        if (p.engine !== 'live2d') continue;
-        const root = normalizeModelDir(dir, p);
+    function wantedModelTails() {
+      const tails = [];
+      let ents = [];
+      try { ents = fs.readdirSync(path.join(ctx.root, 'pets'), { withFileTypes: true }); } catch { return tails; }
+      for (const ent of ents) {
+        try {
+          const c = JSON.parse(fs.readFileSync(path.join(ctx.root, 'pets', ent.name, 'pet.json'), 'utf8'));
+          if (c.engine === 'live2d' && typeof c.model === 'string') tails.push(c.model);
+        } catch { /* not a pack dir */ }
+      }
+      return tails;
+    }
+    function normalizeDirOnce(dir) {
+      for (const tail of wantedModelTails()) {
+        const root = normalizeModelDir(dir, tail);
         if (root) return root;
       }
       return null;
     }
-
-    /* Bind the user model dir (when configured) as the @models asset root. */
-    function bindModelRoot() {
-      if (!prefs.modelDir) return false;
-      try { ctx.addAssetRoot('models', prefs.modelDir); return true; }
-      catch { return false; }
+    function normalizeDirList(dirs) {
+      const out = [];
+      for (const d of (Array.isArray(dirs) ? dirs : [])) {
+        if (typeof d !== 'string' || !d.trim()) continue;
+        const fixed = normalizeDirOnce(d.trim()) || d.trim();
+        if (!out.some(x => x.toLowerCase() === fixed.toLowerCase())) out.push(fixed);
+      }
+      if (!out.length) out.push(MODEL_LIBRARY);
+      return out;
     }
-    bindModelRoot();
+    if (!Array.isArray(prefs.modelDirs) || !prefs.modelDirs.length) {
+      const seed = [MODEL_LIBRARY];
+      if (typeof prefs.modelDir === 'string' && prefs.modelDir) seed.push(prefs.modelDir);
+      prefs.modelDirs = normalizeDirList(seed);
+    }
+    delete prefs.modelDir; // migrated away; dropped from the next save
+
+    /* Asset roots for the protocol: modelDirs[0] -> @models, then @models2... */
+    function modelRoots() {
+      return prefs.modelDirs.map((dir, i) => ({ alias: i ? `models${i + 1}` : 'models', dir }));
+    }
+    function setModelDirs(dirs) {
+      const next = normalizeDirList(dirs);
+      const same = next.length === prefs.modelDirs.length && next.every((d, i) => d === prefs.modelDirs[i]);
+      prefs.modelDirs = next;
+      if (!same) rescanAndBind();
+    }
+    function bindModelRoots() {
+      for (const r of modelRoots()) {
+        try { ctx.addAssetRoot(r.alias, r.dir); } catch { /* bad path; that root simply 404s */ }
+      }
+    }
+    function resolveModel(probe) {
+      if (typeof probe.cfg.model !== 'string') return null;
+      for (const r of modelRoots()) {
+        try { if (fs.existsSync(path.join(r.dir, probe.cfg.model))) return r; } catch { /* ignore */ }
+      }
+      return null;
+    }
+
+    function pngDims(file) {
+      try {
+        const b = Buffer.alloc(24);
+        const fd = fs.openSync(file, 'r');
+        try { fs.readSync(fd, b, 0, 24, 0); } finally { fs.closeSync(fd); }
+        if (b.readUInt32BE(0) === 0x89504e47 && b.toString('ascii', 12, 16) === 'IHDR') {
+          return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+        }
+      } catch { /* unreadable texture */ }
+      return null;
+    }
+
+    /* Naming conventions first (Idle/Tap/wait/work), positional fallback:
+       the first group idles, a second answers clicks. Expressions map on
+       happy/sad keywords when they carry them. */
+    function inferLive2dMap(fr) {
+      const groups = Object.keys(fr.Motions || {});
+      const byName = re => groups.find(g => re.test(g));
+      const idxAll = g => (Array.isArray(fr.Motions[g]) ? fr.Motions[g].map((_, i) => i) : [0]);
+      const exprNames = (fr.Expressions || []).map(e => e.Name || e.File || '');
+      const expr = re => exprNames.find(n => re.test(n));
+      const idleG = byName(/idle/i) || groups[0];
+      const tapG = byName(/tap|click|touch/i) || (groups.length > 1 ? groups[1] : null);
+      const waitG = byName(/wait|lock|hold/i);
+      const workG = byName(/work|type|run|walk/i);
+      const map = { fit: 0.95, footY: 0.97 };
+      if (idleG) map.idle = { group: idleG, index: idxAll(idleG) };
+      if (tapG) map.click = { group: tapG, index: 0 };
+      if (waitG) map.waiting = { group: waitG, index: 0 };
+      if (workG) { map.working = { group: workG, index: 0 }; map.walk = { group: workG, index: 0 }; }
+      const happy = expr(/happy|congr|win|cele|smile/i); if (happy) map.celebrate = { expression: happy, hold: 2600 };
+      const sad = expr(/sad|fail|angry|cry|upset/i); if (sad) map.error = { expression: sad, hold: 2600 };
+      const soft = expr(/think|shy|sleep/i); if (soft) map.thinking = { expression: soft, hold: 3000 };
+      return map;
+    }
+
+    function buildAutoPack(root, model3File) {
+      let st;
+      try { st = extractFirstJsonObject(fs.readFileSync(model3File, 'utf8')); } catch { return null; }
+      const fr = st && st.FileReferences;
+      if (!fr || !fr.Moc) return null;
+      const relModel = path.relative(root.dir, model3File).split(path.sep).join('/');
+      // prettiest label we can get: outer folder, stepping over generic
+      // subdirs like model/ or textures/ up to the library root's own name
+      const dirName = path.basename(path.dirname(model3File));
+      const relTop = relModel.includes('/') ? relModel.split('/')[0] : dirName;
+      const GENERIC = /^(models?|motions?|expressions?|textures?|physics|pose)$/i;
+      const folder = !GENERIC.test(relTop) ? relTop : (!GENERIC.test(dirName) ? dirName : path.basename(root.dir));
+      const slug = folder.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
+      const cfg = {
+        id: `auto-${slug}`,
+        name: { zh: folder, en: folder },
+        version: '0.0.0',
+        author: '',
+        engine: 'live2d',
+        model: relModel,
+        canvas: { w: 400, h: 400 },
+        defaultSize: 260,
+        defaultFacing: 'right',
+        bubbleAnchor: { x: 0.5 },
+        live2d: inferLive2dMap(fr),
+      };
+      try {
+        const tex = (fr.Textures || [])[0];
+        const dims = tex && pngDims(path.join(path.dirname(model3File), tex));
+        if (dims && dims.w > 16 && dims.h > 16) cfg.canvas = dims;
+      } catch { /* default canvas */ }
+      // a pet.json beside the model file refines the inference (user wins)
+      try {
+        const overrideFile = path.join(path.dirname(model3File), 'pet.json');
+        if (fs.existsSync(overrideFile)) {
+          const user = JSON.parse(fs.readFileSync(overrideFile, 'utf8'));
+          cfg.name = user.name || cfg.name;
+          cfg.canvas = user.canvas || cfg.canvas;
+          cfg.defaultSize = user.defaultSize || cfg.defaultSize;
+          cfg.defaultFacing = user.defaultFacing || cfg.defaultFacing;
+          cfg.bubbleAnchor = user.bubbleAnchor || cfg.bubbleAnchor;
+          cfg.model = user.model || cfg.model;
+          cfg.live2d = { ...cfg.live2d, ...(user.live2d || {}) };
+        }
+      } catch { /* broken override — inference stands */ }
+      return {
+        id: cfg.id, dirName: null, auto: true, engine: 'live2d',
+        needsModel: false, rootAlias: root.alias,
+        cfg,
+      };
+    }
+
+    function scanLive2dLibrary(takenIds) {
+      const found = [];
+      const seen = new Set(takenIds);
+      for (const r of modelRoots()) {
+        const stack = [[r.dir, 0]];
+        while (stack.length) {
+          const [d, depth] = stack.shift();
+          let ents = [];
+          try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+          for (const ent of ents) {
+            const full = path.join(d, ent.name);
+            if (ent.isFile() && /\.model3\.json$/i.test(ent.name)) {
+              const ap = buildAutoPack(r, full);
+              if (ap && !seen.has(ap.id)) { seen.add(ap.id); found.push(ap); }
+            } else if (ent.isDirectory() && depth < 3 && !ent.name.startsWith('.') && ent.name !== 'node_modules') {
+              stack.push([full, depth + 1]);
+            }
+          }
+        }
+      }
+      return found;
+    }
+
+    /* Packs live in pets/<id>/pet.json (hand-written) and in the model library
+       (auto-discovered). webm packs need at least one existing anim file;
+       live2d packs need their model resolvable under some registered root. */
+    function scanPacks() {
+      const root = path.join(ctx.root, 'pets');
+      const out = [];
+      let entries = [];
+      try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* no pets dir */ }
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        let cfg;
+        try { cfg = JSON.parse(fs.readFileSync(path.join(root, ent.name, 'pet.json'), 'utf8')); }
+        catch { console.warn(`[desktop-pet] pets/${ent.name}: pet.json missing/invalid, skipped`); continue; }
+        const engine = cfg.engine === 'live2d' ? 'live2d' : 'webm';
+        let anims = [];
+        let rootHit = null;
+        if (engine === 'live2d') {
+          rootHit = resolveModel({ cfg });
+        } else {
+          anims = (Array.isArray(cfg.anims) ? cfg.anims : []).filter(a =>
+            a && typeof a.name === 'string' && typeof a.file === 'string'
+            && fs.existsSync(path.join(root, ent.name, a.file)));
+          if (!anims.length) { console.warn(`[desktop-pet] pets/${ent.name}: no playable anims, skipped`); continue; }
+        }
+        out.push({
+          id: cfg.id || ent.name,
+          dirName: ent.name,
+          engine,
+          needsModel: engine === 'live2d' && !rootHit,
+          rootAlias: rootHit ? rootHit.alias : null,
+          cfg: { ...cfg, engine, anims },
+        });
+      }
+      for (const ap of scanLive2dLibrary(out.map(p => p.id))) out.push(ap);
+      return out;
+    }
+
+    let packs = scanPacks();
+    const packById = id => packs.find(p => p.id === id || p.dirName === id) || null;
+    let pack = packById(prefs.pack) || packs.find(p => !p.needsModel) || packs[0] || null;
+    if (pack && pack.needsModel) {
+      const usable = packs.find(p => !p.needsModel);
+      if (usable) pack = usable; // an unresolved model never steals the stage from a working pack
+    }
+    if (!pack) throw new Error('no pet pack found under pets/');
+
+    bindModelRoots();
+
+    /* Live2D roots changed? rescan + rebind, fix the active pack, rebuild the
+       window when the engine flipped. */
+    function rescanAndBind() {
+      bindModelRoots();
+      packs = scanPacks();
+      const cur = packById(pack.id);
+      if (!cur || cur.needsModel) {
+        const usable = packs.find(p => !p.needsModel);
+        if (usable) { pack = usable; prefs.pack = usable.id; }
+        else if (cur) pack = cur;
+      } else pack = cur;
+      savePrefs();
+      if (petWin && !petWin.isDestroyed()) {
+        petWin.destroy();
+        petWin = null;
+      }
+      ensureWindow();
+      pushState();
+    }
 
     /* model3.json cleaning: some exporters append trailing `//` disclaimer
        comments that break strict JSON.parse (the official loaders use it).
@@ -158,14 +338,15 @@ module.exports = {
       return null;
     }
     function loadLive2dSettings(p) {
+      const root = modelRoots().find(r => r.alias === p.rootAlias) || modelRoots()[0];
       // asset paths in model3.json are relative to ITS OWN directory, not the model root
-      const relBase = String(p.cfg.model).split('/').slice(0, -1).concat([]).join('/');
+      const relBase = String(p.cfg.model).split('/').slice(0, -1).join('/');
       const abs = rel => {
-        const joined = (relBase ? relBase + '/' : '') + String(rel).replace(/^\.\/+/, '');
-        return `plugin://${ctx.id}/@models/${joined.split('/').map(encodeURIComponent).join('/')}`;
+        const joined = (relBase ? relBase + '/' : '') + String(rel).replace(/^\.+\/+/, '');
+        return `plugin://${ctx.id}/@${p.rootAlias || root.alias}/${joined.split('/').map(encodeURIComponent).join('/')}`;
       };
       try {
-        const raw = fs.readFileSync(path.join(prefs.modelDir, p.cfg.model), 'utf8');
+        const raw = fs.readFileSync(path.join(root.dir, p.cfg.model), 'utf8');
         const s = extractFirstJsonObject(raw);
         const fr = s && s.FileReferences;
         if (!fr) throw new Error('no FileReferences');
@@ -305,8 +486,9 @@ module.exports = {
         engine: pack.engine,
         anims: pack.engine === 'live2d' ? live2dKeys() : pack.cfg.anims.map(a => a.name),
       },
-      packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id, engine: p.engine, needsModel: !!p.needsModel })),
-      modelDir: prefs.modelDir || null,
+      packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id, engine: p.engine, needsModel: !!p.needsModel, auto: !!p.auto })),
+      modelDirs: prefs.modelDirs.slice(),
+      modelLibrary: MODEL_LIBRARY,
       prefs: { pack: pack.id, ...prefsPayload() },
       voices: ttsService.getPresetVoices(),
       visible: !!(petWin && !petWin.isDestroyed() && petWin.isVisible()),
@@ -476,8 +658,8 @@ module.exports = {
       let payload;
       try {
         payload = route
-          ? { type: route.type, value: fs.readFileSync(fp, 'utf8').slice(0, MAX_TEXT_BYTES) }
-          : { type: 'text/base64', value: fs.readFileSync(fp).toString('base64') }; // codec-lab sniffs the image bytes back out
+          ? { type: route.type, value: fs.readFileSync(fp, 'utf8').replace(/^\uFEFF/, '').slice(0, MAX_TEXT_BYTES), name: nm, path: fp }
+          : { type: 'text/base64', value: fs.readFileSync(fp).toString('base64'), name: nm, path: fp }; // codec-lab sniffs the image bytes back out
       } catch (err) { say(`读「${nm}」失败了：${String(err.message).slice(0, 40)}`); return { ok: false, error: err.message }; }
       const target = route ? route.pluginId : 'codec-lab';
       const label = route ? route.label : { zh: '编码实验室', en: 'Codec Lab' };
@@ -529,9 +711,9 @@ module.exports = {
             engine: pack.engine,
             packDir: pack.dirName,
             pluginBase: `plugin://${ctx.id}`,
-            assetBase: pack.engine === 'live2d' ? `plugin://${ctx.id}/@models/` : `plugin://${ctx.id}/pets/${pack.dirName}/`,
+            assetBase: pack.engine === 'live2d' ? `plugin://${ctx.id}/@${pack.rootAlias || 'models'}/` : `plugin://${ctx.id}/pets/${pack.dirName}/`,
             modelUrl: pack.engine === 'live2d' && pack.cfg.model
-              ? `plugin://${ctx.id}/@models/${String(pack.cfg.model).split('/').map(encodeURIComponent).join('/')}`
+              ? `plugin://${ctx.id}/@${pack.rootAlias || 'models'}/${String(pack.cfg.model).split('/').map(encodeURIComponent).join('/')}`
               : null,
             model3: pack.engine === 'live2d' ? loadLive2dSettings(pack) : null,
             scriptsBase: ctx.url('vendor'),
@@ -644,34 +826,12 @@ module.exports = {
             applyBounds(x, y, width, height);
           }
         }
-        if (args.modelDir === null || args.modelDir === '') {
-          // explicit unbind: drop the root and rescan so live2d packs fall back
-          prefs.modelDir = null;
-          if (typeof ctx.removeAssetRoot === 'function') ctx.removeAssetRoot('models');
-          packs = scanPacks();
-          const curNow = packById(pack.id);
-          if (curNow) pack = curNow;
-          if (pack.needsModel) {
-            const usable = packs.find(p => !p.needsModel);
-            if (usable) { pack = usable; prefs.pack = usable.id; }
-            reload = true;
-          }
-        }
-        if (typeof args.modelDir === 'string' && args.modelDir.trim()) {
-          const dir = args.modelDir.trim();
-          if (dir === prefs.modelDir) { /* no-op */ }
-          else if (fs.existsSync(dir)) {
-            const fixed = findModelRoot(dir); // tolerate off-by-a-level picks
-            prefs.modelDir = fixed || dir;
-            bindModelRoot();
-            packs = scanPacks();
-            const cur = packById(pack.id);
-            if (cur) pack = cur; // refresh needsModel on the live pack object
-            reload = true;       // engine may change -> fresh handshake
-            if (!fixed) console.warn('[desktop-pet] model dir bound but no pack model found under it (walked up/down):', dir);
-          } else {
-            return { ok: false, error: '目录不存在：' + dir };
-          }
+        if (Array.isArray(args.modelDirs)) setModelDirs(args.modelDirs);
+        else if (typeof args.addModelDir === 'string' && args.addModelDir.trim()) setModelDirs(prefs.modelDirs.concat([args.addModelDir.trim()]));
+        else if (Number.isInteger(args.removeModelDir)) {
+          const next = prefs.modelDirs.slice();
+          next.splice(args.removeModelDir, 1);
+          setModelDirs(next);
         }
         let packErr = null;
         if (typeof args.pack === 'string') {
@@ -694,6 +854,13 @@ module.exports = {
         return packErr ? { ok: true, packError: packErr } : { ok: true };
       },
       quip: (args = {}) => sendQuip(args && args.text),
+      setModelDirs: dirs => { setModelDirs(dirs); return { ok: true, modelDirs: prefs.modelDirs.slice() }; },
+      openModelLibrary: () => {
+        try { fs.mkdirSync(MODEL_LIBRARY, { recursive: true }); } catch { /* exists */ }
+        require('electron').shell.openPath(MODEL_LIBRARY);
+        return { ok: true, path: MODEL_LIBRARY };
+      },
+      rescan: () => { rescanAndBind(); return { ok: true }; },
       /* native picker for the Live2D model root (panel button) */
       chooseModelDir: async () => {
         const { dialog } = require('electron');

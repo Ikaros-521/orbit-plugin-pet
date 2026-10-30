@@ -52,11 +52,16 @@
               <span class="dpet-row-label">${LABELS.pack()}</span>
               <select class="dpet-pack input"></select>
             </label>
-            <div class="dpet-row dpet-modelrow dpet-hidden">
-              <span class="dpet-row-label">${t('模型目录', 'Model dir')}</span>
-              <code class="dpet-model-dir" title=""></code>
-              <button type="button" class="dpet-model btn ghost small">${t('绑定…', 'Bind…')}</button>
-              <button type="button" class="dpet-model-unbind btn ghost small dpet-hidden" title="${t('解绑模型目录', 'Unbind model dir')}">✕</button>
+            <div class="dpet-library dpet-hidden">
+              <div class="dpet-row">
+                <span class="dpet-row-label">${t('模型库', 'Model library')}</span>
+                <span class="dpet-hint">${t('把含 .model3.json 的模型文件夹放进库里，自动成为宠物包', 'Drop folders with a .model3.json in — they become pet packs automatically')}</span>
+              </div>
+              <div class="dpet-dirs"></div>
+              <div class="dpet-row dpet-lib-btns">
+                <button type="button" class="dpet-lib-open btn ghost small">${t('打开模型库…', 'Open library…')}</button>
+                <button type="button" class="dpet-lib-add btn ghost small">${t('添加模型目录…', 'Add model dir…')}</button>
+              </div>
             </div>
             <label class="dpet-row dpet-check">
               <input class="dpet-walk" type="checkbox" />
@@ -134,7 +139,7 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
-        modelRow: $('.dpet-modelrow'), modelDir: $('.dpet-model-dir'), model: $('.dpet-model'), modelUnbind: $('.dpet-model-unbind'),
+        library: $('.dpet-library'), dirs: $('.dpet-dirs'), libOpen: $('.dpet-lib-open'), libAdd: $('.dpet-lib-add'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         tasks: $('.dpet-tasks'),
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
@@ -166,7 +171,7 @@
         const cur = els.pack.value;
         const options = state.packs.map(p => {
           const name = p.name && (L() ? p.name.en : p.name.zh) || p.id;
-          const flag = p.engine === 'live2d' ? (p.needsModel ? ` (${t('未绑定模型', 'no model')})` : ' (Live2D)' ) : '';
+          const flag = p.engine === 'live2d' ? (p.needsModel ? ` (${t('未发现模型', 'no model')})` : p.auto ? ` (${t('自动发现', 'auto')})` : ' (Live2D)') : '';
           return `<option value="${p.id}">${name}${flag}</option>`;
         }).join('');
         if (els.pack.innerHTML !== options) els.pack.innerHTML = options;
@@ -175,10 +180,20 @@
         if (els.pack.selectedOptions[0]) els.pack.selectedOptions[0].selected = true;
 
         const hasLive2d = (state.packs || []).some(p => p.engine === 'live2d');
-        els.modelRow.classList.toggle('dpet-hidden', !hasLive2d);
-        els.modelDir.textContent = state.modelDir || t('未绑定', 'not bound');
-        els.modelDir.title = state.modelDir || '';
-        els.modelUnbind.classList.toggle('dpet-hidden', !state.modelDir);
+        els.library.classList.toggle('dpet-hidden', !hasLive2d);
+        els.dirs.innerHTML = (state.modelDirs || []).map((d, i) => {
+          const isLib = d === state.modelLibrary;
+          const tag = isLib ? `<span class="dpet-dir-tag">${t('默认库', 'default')}</span>` : '';
+          const rm = isLib ? '' : `<button type="button" class="dpet-dir-x btn ghost small" data-i="${i}" title="${t('移除该目录', 'Remove this dir')}">✕</button>`;
+          return `<div class="dpet-dir"><code title="${d.replace(/"/g, '&quot;')}">${d}</code>${tag}${rm}</div>`;
+        }).join('');
+        els.dirs.querySelectorAll('.dpet-dir-x').forEach(btn => btn.addEventListener('click', async () => {
+          const next = (state.modelDirs || []).slice();
+          next.splice(Number(btn.dataset.i), 1);
+          await call('setPrefs', { modelDirs: next });
+          const st2 = await call('getState');
+          if (st2 && st2.ok) { state = st2.data; render(); }
+        }));
 
         els.walk.checked = !!prefs.autoWalk;
         els.bubble.checked = !!prefs.bubbleOn;
@@ -230,6 +245,20 @@
       });
       els.size.addEventListener('input', () => { els.sizeVal.textContent = `${els.size.value}px`; });
       els.size.addEventListener('change', () => { call('setPrefs', { size: Number(els.size.value) }); });
+      els.pack.addEventListener('change', async () => {
+        const res = await call('setPrefs', { pack: els.pack.value });
+        const d = res && res.ok ? res.data : null;
+        if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
+      });
+      els.libOpen.addEventListener('click', () => { call('openModelLibrary'); });
+      els.libAdd.addEventListener('click', async () => {
+        const pick = await call('chooseModelDir');
+        const dir = pick && pick.ok && pick.data && pick.data.dir;
+        if (!dir) return;
+        await call('setPrefs', { addModelDir: dir });
+        const st = await call('getState');
+        if (st && st.ok) { state = st.data; render(); }
+      });
       els.pack.addEventListener('change', async () => {
         const res = await call('setPrefs', { pack: els.pack.value });
         const d = res && res.ok ? res.data : null;

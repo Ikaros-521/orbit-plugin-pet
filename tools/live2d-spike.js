@@ -46,7 +46,7 @@ app.whenReady().then(async () => {
     if (!manager.activate('desktop-pet')) fail('activate: ' + manager.loadErrors.get('desktop-pet'));
 
     /* bind model dir, switch pack, let the live2d engine boot */
-    let r = await manager.call('desktop-pet', 'setPrefs', { modelDir });
+    let r = await manager.call('desktop-pet', 'setPrefs', { modelDirs: [modelDir] });
     say('bind modelDir: ' + JSON.stringify(r));
     const st0 = await manager.call('desktop-pet', 'getState');
     say('state after bind: modelDir=' + st0.modelDir + ' packs=' + JSON.stringify(st0.packs));
