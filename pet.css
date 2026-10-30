@@ -58,6 +58,41 @@ body { display: flex; flex-direction: column; }
   border-bottom: 0;
 }
 
+/* --- todo badge (memo's unchecked tasks; click opens memo) -------------------- */
+#tasks {
+  position: absolute; right: 10px; top: 8px;
+  min-width: 22px; height: 22px; padding: 0 6px;
+  border-radius: 11px;
+  background: #e5484d; color: #fff;
+  font: 700 12px/22px 'Segoe UI', sans-serif; text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .32);
+  pointer-events: auto; cursor: pointer;
+}
+#tasks.hidden { display: none; }
+
+/* --- slingshot band (drawn while pulling after a double-click) ---------------- */
+#sling {
+  position: absolute; left: 0; top: 0;
+  height: 5px; border-radius: 3px;
+  background: linear-gradient(90deg, #d97757, rgba(217, 119, 87, .3));
+  transform-origin: 0 50%;
+  display: none;
+  pointer-events: none;
+  z-index: 9;
+}
+body.slingready #stage video { transform: scaleY(.86) translateY(7%); transition: transform .16s ease; }
+#stage.spin video { animation: pet-spin .65s cubic-bezier(.3, .7, .4, 1); }
+@keyframes pet-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* --- drop feedback ------------------------------------------------------------ */
+body.dropover #stage::after {
+  content: '';
+  position: absolute; inset: 3px;
+  border: 2px dashed rgba(255, 176, 80, .95);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
 /* --- video stage (pet body) ----------------------------------------------------- */
 #stage {
   position: relative;

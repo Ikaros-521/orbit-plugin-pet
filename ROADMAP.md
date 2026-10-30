@@ -24,10 +24,11 @@ dsh-pet 锚定 DSH 会话，我们的联动对象换成工具箱自己的状态�
 
 ## Phase 3 · v0.4 「有手脚」——交互深化
 
-- [ ] 文件拖给桌宠（借 dsh-pet file-drop 机制）：json→json-editor、图片→color-lab、文本→memo——桌宠成为工具箱投递入口
-- [ ] 待办挂牌（借 todo-bubble：挂头顶、临期提醒加密），接 memo 数据源
-- [ ] 物理彩蛋：弹弓双击、弹簧归位（dsh-pet mode=spring）、节日动画池（时间驱动加权事件）
-- [ ] 多宠同屏 + 互撞（collision broker 思路；backend 窗口表改 Map）
+- [x] 文件拖给桌宠（借 dsh-pet file-drop 机制）：json→json-editor、文本/日志/CSV/SVG→备忘录、图片→编码实验室（base64 自动图片预览）——桌宠成为工具箱投递入口（core 新增 `ctx.callPlugin` / `ctx.openPluginPanel` 跨插件通道）
+- [x] 待办挂牌（借 todo-bubble 的轻量版）：红角标镜向备忘录未勾任务，点头条开备忘；碎碎念每 20 分钟最多催一次
+- [x] 物理彩蛋：双击弹弓（蹲伏蓄力→皮筋带拉伸→反向甩出+旋转）、`resetPosition` 阻尼弹簧回家
+- [x] 节日动画池：pet.json `season: [10]` 月份门控 + 示例「南瓜装小轨」正值万圣节窗口
+- [ ] 多宠同屏 + 互撞（collision broker 思路；backend 窗口表改 Map）——顺延 v0.5
 
 ## Phase 4 · v1.0 「能繁殖」——宠物包生态
 

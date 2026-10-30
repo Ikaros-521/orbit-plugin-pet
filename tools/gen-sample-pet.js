@@ -256,6 +256,47 @@ const ANIMS = {
     return shapes;
   } },
 
+  /* ===== seasonal example ===== */
+
+  /* 3s loop (season [10]): pumpkin suit — orange gradient body, green stem,
+     triangle eyes, zigzag grin, flapping bat wings */
+  halloween: { frames: 90, build(t) {
+    const bob = 3 * Math.sin(TAU * 2 * t);
+    const flap = Math.sin(TAU * 2 * t) * 0.5 + 0.5;
+    const pumpkin = y => {
+      const k = clamp01((y - 55) / 95);
+      return [255, Math.round(mix(179, 110, k)), Math.round(mix(71, 26, k)), 255];
+    };
+    const shapes = [];
+    // wings first so the body overlaps their roots
+    for (const side of [-1, 1]) {
+      const wy = BODY.cy - 6 + flap * 9;
+      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 8), wy, 17, 6.5, () => hex('#2b2334')));
+      shapes.push(ellipse(BODY.cx + side * (BODY.rx + 20), wy + 5 - flap * 4, 11, 4.5, () => hex('#2b2334')));
+    }
+    shapes.push(rect(BODY.cx - 5, BODY.cy - BODY.ry - 9 + bob, BODY.cx + 5, BODY.cy - BODY.ry + 7 + bob, hex('#6b8f3a')));
+    shapes.push(...bodyShapes({ sy: 1 + 0.02 * Math.sin(TAU * 2 * t), dy: bob, feet: { liftL: 0, liftR: 0 }, fill: pumpkin }));
+    // triangle eyes (stroke outlines)
+    for (const side of [-1, 1]) {
+      const ex = BODY.cx + side * 22;
+      const ty = EYE.y - 4 + bob, by = EYE.y + 7 + bob, s = 8;
+      shapes.push(segment(ex - s, by, ex + s, by, 2.4, C.dark));
+      shapes.push(segment(ex - s, by, ex, ty, 2.4, C.dark));
+      shapes.push(segment(ex + s, by, ex, ty, 2.4, C.dark));
+    }
+    // zigzag grin
+    const gy = 126 + bob;
+    const xs = [-24, -12, 0, 12, 24];
+    for (let i = 0; i < xs.length - 1; i++) {
+      shapes.push(segment(
+        BODY.cx + xs[i], gy + (i % 2 ? 4 : -3),
+        BODY.cx + xs[i + 1], gy + ((i + 1) % 2 ? 4 : -3),
+        2.8, C.mouth,
+      ));
+    }
+    return shapes;
+  } },
+
   /* ===== state animations (workflow / agent linkage, role:state) ===== */
 
   /* 3s loop: head sway, upward gaze, three thought dots rising at top right */

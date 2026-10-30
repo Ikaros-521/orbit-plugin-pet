@@ -72,6 +72,11 @@
               <span class="dpet-row-label">${t('工作流联动', 'Workflow reactions')}</span>
               <span class="dpet-hint">${t('运行时打工、成功庆祝、失败难过', 'Working / celebrate / error on workflow runs')}</span>
             </label>
+            <label class="dpet-row dpet-check">
+              <input class="dpet-tasks" type="checkbox" />
+              <span class="dpet-row-label">${t('待办挂牌', 'Todo badge')}</span>
+              <span class="dpet-hint">${t('镜向备忘录未勾任务，点头条开备忘', 'Mirrors open memo tasks; click the badge to open Memo')}</span>
+            </label>
             <div class="dpet-row">
               <button type="button" class="dpet-quip btn ghost small">${t('说一句', 'Say something')}</button>
               <span class="dpet-quip-result"></span>
@@ -94,6 +99,7 @@
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
+        tasks: $('.dpet-tasks'),
         quip: $('.dpet-quip'), quipResult: $('.dpet-quip-result'),
         anim: $('.dpet-anim'), credit: $('.dpet-credit'), derived: $('.dpet-derived'),
       };
@@ -106,7 +112,7 @@
         const { pack, prefs, visible, status } = state;
         els.name.textContent = (pack.name && (L() ? pack.name.en : pack.name.zh)) || pack.id;
         els.status.textContent = visible
-          ? `${LABELS.nowPlaying()}: ${status && status.anim ? status.anim : '…'}`
+          ? `${LABELS.nowPlaying()}: ${status && status.anim ? status.anim : '…'}${state.tasks ? ` · ${t('待办', 'todos')} ${state.tasks}` : ''}`
           : LABELS.resting();
         els.toggle.textContent = visible ? LABELS.hideBtn() : LABELS.showBtn();
         els.art.style.backgroundImage = 'url(plugin://desktop-pet/icon.svg)';
@@ -128,6 +134,7 @@
         els.bubble.checked = !!prefs.bubbleOn;
         els.voice.checked = !!prefs.voiceOn;
         els.wf.checked = prefs.wfOn !== false;
+        els.tasks.checked = prefs.tasksOn !== false;
 
         if (status && Number.isFinite(status.x)) {
           els.anim.textContent = `${LABELS.pos()}: ${status.x}, ${status.y}`;
@@ -154,6 +161,7 @@
       els.bubble.addEventListener('change', () => { call('setPrefs', { bubbleOn: els.bubble.checked }); });
       els.voice.addEventListener('change', () => { call('setPrefs', { voiceOn: els.voice.checked }); });
       els.wf.addEventListener('change', () => { call('setPrefs', { wfOn: els.wf.checked }); });
+      els.tasks.addEventListener('change', () => { call('setPrefs', { tasksOn: els.tasks.checked }); });
       els.quip.addEventListener('click', async () => {
         const res = await call('quip');
         const d = res && res.ok ? res.data : { ok: false, error: res && res.error };

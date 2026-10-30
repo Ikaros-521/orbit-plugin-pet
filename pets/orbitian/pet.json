@@ -17,6 +17,7 @@
     { "name": "walk",  "file": "walk.webm",  "weight": 0, "role": "walk" },
     { "name": "happy", "file": "happy.webm", "weight": 1, "role": "click", "once": true },
     { "name": "sleep", "file": "sleep.webm", "weight": 1, "role": "idle" },
+    { "name": "halloween", "file": "halloween.webm", "weight": 3, "role": "idle", "season": [10] },
     { "name": "thinking",  "file": "thinking.webm",  "weight": 0, "role": "state" },
     { "name": "working",   "file": "working.webm",   "weight": 0, "role": "state" },
     { "name": "waiting",   "file": "waiting.webm",   "weight": 0, "role": "state" },

@@ -108,7 +108,7 @@
   function scheduleIdle() {
     clearTimeout(idleTimer);
     if (prefs.locked) return; // takeover owns the stage; onLock(false) reschedules
-    idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking && !prefs.locked) idle(); }, 6000 + Math.random() * 8000);
+    idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking && !slingMode && !prefs.locked) idle(); }, 6000 + Math.random() * 8000);
   }
 
   /* --- window position ------------------------------------------------------ */
@@ -262,6 +262,34 @@
     scheduleWalk();
   }
 
+  /* --- spring home -------------------------------------------------------------- */
+
+  /* Damped-spring glide to a window-space target (menu / reset position) — a
+     teleport reads as a glitch for a living thing. */
+  let springRaf = 0;
+  function springTo(tx, ty) {
+    if (dragging || airborne || !cfg) return;
+    stopLoops();
+    const K = 16, D = 9; // stiffness / damping (per second)
+    let vx = 0, vy = 0, last = performance.now();
+    const step = now => {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+      vx += ((tx - shadowX) * K - vx * D) * dt;
+      vy += ((ty - shadowY) * K - vy * D) * dt;
+      moveNow(shadowX + vx * dt, shadowY + vy * dt);
+      if (Math.hypot(tx - shadowX, ty - shadowY) < 1.5 && Math.hypot(vx, vy) < 40) {
+        moveNow(tx, ty);
+        scheduleIdle();
+        scheduleWalk();
+        return;
+      }
+      springRaf = requestAnimationFrame(step);
+    };
+    cancelAnimationFrame(springRaf);
+    springRaf = requestAnimationFrame(step);
+  }
+
   /* --- drag & click -------------------------------------------------------- */
 
   let dragging = false;
@@ -289,6 +317,11 @@
     if (!dragging) return;
     samples.push({ t: performance.now(), sx: e.screenX, sy: e.screenY });
     while (samples.length > 2 && performance.now() - samples[0].t > 120) samples.shift();
+    if (slingMode) { // stretch the band, body holds its ground
+      moved = Math.max(moved, Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY));
+      drawSlingBand(e.clientX, e.clientY);
+      return;
+    }
     // absolute positioning from the press anchor; requestMove coalesces the
     // raw (up to 1000Hz) event stream into one bounds IPC per frame
     const nx = downWX + (e.screenX - downSX);
@@ -302,6 +335,14 @@
     dragging = false;
     stage.classList.remove('dragging');
     try { stage.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    if (slingMode) {
+      const a = slingAnchor();
+      const px = e.clientX - a.x, py = e.clientY - a.y;
+      leaveSling();
+      if (Math.hypot(px, py) > 40) { spin(); toss(-px * 5, -py * 5); } // fire opposite the pull
+      else { settle(); }
+      return;
+    }
     const dt = performance.now() - downAt;
     if (moved < 6 && dt < 400) {
       // click: Q弹 + one-shot reaction anim, then back to idle
@@ -336,6 +377,7 @@
     cancelAnimationFrame(walkRaf);
     airborne = false;
     cancelAnimationFrame(physRaf);
+    cancelAnimationFrame(springRaf);
     clearTimeout(walkTimer);
     clearTimeout(idleTimer);
   }
@@ -382,6 +424,72 @@
 
   bubble.addEventListener('click', hideBubble);
 
+  /* --- todo badge ------------------------------------------------------------- */
+
+  const tasksEl = document.getElementById('tasks');
+  window.pet.onTasks(({ count } = {}) => {
+    if (count > 0) {
+      tasksEl.querySelector('span').textContent = count > 9 ? '9+' : String(count);
+      tasksEl.classList.remove('hidden');
+    } else {
+      tasksEl.classList.add('hidden');
+    }
+  });
+  tasksEl.addEventListener('click', () => window.pet.tasksClick());
+
+  /* --- slingshot -------------------------------------------------------------- */
+
+  /* Double-click crouches (slingready); the NEXT drag does not move the body —
+     it stretches the band. Releasing fires the pet opposite to the pull with
+     a spin. Small pulls cancel politely. */
+  const slingEl = document.getElementById('sling');
+  let slingMode = false;
+  let slingExit = 0;
+
+  const slingAnchor = () => ({
+    x: window.innerWidth / 2,
+    y: marginH + (window.innerHeight - marginH) * 0.55,
+  });
+
+  function hideSlingBand() { slingEl.style.display = 'none'; }
+
+  function leaveSling() {
+    slingMode = false;
+    clearTimeout(slingExit);
+    document.body.classList.remove('slingready');
+    hideSlingBand();
+  }
+
+  function enterSling() {
+    if (dragging || airborne || walking) return;
+    slingMode = true;
+    document.body.classList.add('slingready');
+    clearTimeout(slingExit);
+    slingExit = setTimeout(leaveSling, 4000); // stand back up if nobody pulls
+    showBubble('拉我呀～');
+  }
+
+  function drawSlingBand(cx, cy) {
+    const a = slingAnchor();
+    const dx = cx - a.x, dy = cy - a.y;
+    const len = Math.min(300, Math.hypot(dx, dy));
+    const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+    slingEl.style.display = 'block';
+    slingEl.style.left = a.x + 'px';
+    slingEl.style.top = a.y + 'px';
+    slingEl.style.width = len + 'px';
+    slingEl.style.transform = `rotate(${ang}deg)`;
+  }
+
+  function spin() {
+    stage.classList.remove('spin');
+    void stage.offsetWidth;
+    stage.classList.add('spin');
+    setTimeout(() => stage.classList.remove('spin'), 700);
+  }
+
+  stage.addEventListener('dblclick', enterSling);
+
   /* --- click-through -------------------------------------------------------- */
 
   /* The window stays transparent to the mouse except over the pet body (the
@@ -390,11 +498,13 @@
      owns both directions of the toggle — no reliance on enter/leave edges,
      and the empty bubble strip never swallows clicks. */
   let ignoring = null;
+  const inRect = (el, x, y) => {
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
   function overBody(x, y) {
-    if (bubbleVisible) {
-      const r = bubble.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
-    }
+    if (bubbleVisible && inRect(bubble, x, y)) return true;
+    if (!tasksEl.classList.contains('hidden') && inRect(tasksEl, x, y)) return true;
     return y >= marginH;
   }
   window.addEventListener('mousemove', e => {
@@ -468,6 +578,7 @@
     prefs.locked = !!locked;
     if (!prefs.locked) { scheduleIdle(); scheduleWalk(); }
   });
+  window.pet.onSpring(({ x, y } = {}) => springTo(x, y));
   window.pet.onDisplays(list => { displays = list; });
 
   window.pet.ready();

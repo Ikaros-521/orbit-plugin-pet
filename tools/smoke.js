@@ -40,7 +40,10 @@ app.whenReady().then(async () => {
   fs.cpSync(path.join(__dirname, '..'), path.join(userPlugins, 'desktop-pet'), { recursive: true });
 
   const cfg = new Config(tmp);
-  const manager = new PluginManager({ userDataDir: tmp, config: cfg, getHostWindow: () => null });
+  /* bare hidden window as the fake host: file-drop routing calls
+     openPluginPanel, which needs a live host window to navigate */
+  const fakeHost = new (require('electron').BrowserWindow)({ show: false, width: 80, height: 60 });
+  const manager = new PluginManager({ userDataDir: tmp, config: cfg, getHostWindow: () => fakeHost });
   /* mock the core workflow bus so the reaction chain runs end-to-end */
   let wfBusFn = null;
   manager.workflowManager = { onWorkflowEvent: fn => { wfBusFn = fn; return () => {}; } };
@@ -209,6 +212,51 @@ app.whenReady().then(async () => {
   if (stRevoked.lock && stRevoked.lock.active) fail('user touch did not revoke the lock');
   ok('user touch revoked the lock');
 
+  /* --- seasonal gate ---------------------------------------------------------- */
+  const inSeason = new Date().getMonth() === 9; // October
+  const hwn = await manager.call('desktop-pet', 'play', { anim: 'halloween' });
+  if (inSeason && !hwn.ok) fail('halloween must be in pool during October: ' + JSON.stringify(hwn));
+  if (!inSeason && hwn.error !== 'unknown anim') fail('out-of-season anim must be hidden: ' + JSON.stringify(hwn));
+  ok(`season gate (${inSeason ? 'October: halloween in pool' : 'off-season: halloween hidden'})`);
+
+  /* --- file-drop routing ---------------------------------------------------------- */
+  fs.writeFileSync(path.join(tmp, 'drop.json'), '{"hello":"pet"}');
+  fs.writeFileSync(path.join(tmp, 'drop.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
+  fs.writeFileSync(path.join(tmp, 'drop.exe'), 'MZ fake');
+  const rJson = await manager.call('desktop-pet', 'fileDrop', { path: path.join(tmp, 'drop.json'), name: 'drop.json' });
+  if (!rJson.ok || rJson.pluginId !== 'json-editor') fail('json route: ' + JSON.stringify(rJson));
+  const rImg = await manager.call('desktop-pet', 'fileDrop', { path: path.join(tmp, 'drop.png'), name: 'drop.png' });
+  if (!rImg.ok || rImg.pluginId !== 'codec-lab') fail('image route: ' + JSON.stringify(rImg));
+  const rBad = await manager.call('desktop-pet', 'fileDrop', { path: path.join(tmp, 'drop.exe'), name: 'drop.exe' });
+  if (rBad.ok || rBad.error !== 'unhandled') fail('unknown extension must be refused: ' + JSON.stringify(rBad));
+  ok('file drop routes: json->json-editor, png->codec-lab, unknown refused with a bubble');
+
+  /* --- todo badge mirrored from memo ------------------------------------------------ */
+  if (!manager.activate('memo')) fail('memo backend needed for todo-badge test');
+  await manager.call('memo', 'create', { content: '- [ ] 任务甲\n- [ ] 任务乙\n- [x] 任务丙' });
+  await manager.call('desktop-pet', 'setPrefs', { tasksOn: true });
+  let stT = null;
+  for (let i = 0; i < 12 && !(stT && stT.tasks >= 3); i++) {
+    await sleep(300);
+    stT = await manager.call('desktop-pet', 'getState');
+  }
+  if (!stT || stT.tasks < 3) fail('todo badge should mirror memo open tasks: ' + JSON.stringify(stT && stT.tasks));
+  ok(`todo badge mirrors memo (${stT.tasks} open tasks incl. the seeded note)`);
+
+  /* --- spring home -------------------------------------------------------------------- */
+  await manager.call('desktop-pet', 'setPrefs', { autoWalk: false });
+  const rp = await manager.call('desktop-pet', 'resetPosition');
+  let stS = null;
+  for (let i = 0; i < 24; i++) {
+    await sleep(300);
+    stS = (await manager.call('desktop-pet', 'getState')).status;
+    if (stS && Math.abs(stS.x - rp.x) < 6 && Math.abs(stS.y - rp.y) < 6) break;
+  }
+  if (!stS || Math.abs(stS.x - rp.x) > 8 || Math.abs(stS.y - rp.y) > 8) {
+    fail(`spring home did not arrive: at ${stS && stS.x},${stS && stS.y} want ${rp.x},${rp.y}`);
+  }
+  ok('resetPosition glides home on a damped spring');
+
   /* --- prefs ------------------------------------------------------------------ */
   await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });
   const st3 = await manager.call('desktop-pet', 'getState');
@@ -229,6 +277,7 @@ app.whenReady().then(async () => {
   manager.deactivate('desktop-pet');
   if (manager.windowsOf('desktop-pet').length !== 0) fail('window survived deactivate');
   ok('deactivate destroys sprite window');
+  fakeHost.destroy();
 
   console.log('ALL PET SMOKE CHECKS PASSED');
   app.exit(0);

@@ -33,6 +33,7 @@ module.exports = {
       bubbleOn: true,
       voiceOn: false,
       wfOn: true,          // react to workflow runs with state animations
+      tasksOn: true,       // unchecked-todo badge mirrored from memo
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
       x: null,
       y: null,
@@ -190,11 +191,13 @@ module.exports = {
       status: lastStatus,
       // pure read: lazy expiry happens in isLocked() on the interaction paths
       lock: lock ? { active: Date.now() < lock.expiresAt, owner: lock.owner, expiresAt: lock.expiresAt } : { active: false },
+      tasks: tasksState.count,
     });
     const pushState = () => ctx.send('state', stateFor());
     const prefsPayload = () => ({
       size: prefs.size, autoWalk: prefs.autoWalk, bubbleOn: prefs.bubbleOn,
-      voiceOn: prefs.voiceOn, wfOn: prefs.wfOn, lang: prefs.lang, margin: marginH(prefs.size),
+      voiceOn: prefs.voiceOn, wfOn: prefs.wfOn, tasksOn: prefs.tasksOn,
+      lang: prefs.lang, margin: marginH(prefs.size),
     });
 
     /* --- quips (local chatter) ---------------------------------------------- */
@@ -237,7 +240,16 @@ module.exports = {
     };
     const scheduleQuip = () => {
       clearTimeout(quipTimer);
-      quipTimer = setTimeout(() => { sendQuip(); scheduleQuip(); }, 180000 + Math.random() * 240000);
+      quipTimer = setTimeout(() => {
+        // when todos are piling up, nag about them at most every 20 minutes
+        if (tasksState.count > 0 && Date.now() - tasksState.lastNag > 20 * 60000) {
+          tasksState.lastNag = Date.now();
+          sendQuip(`备忘录里还有 ${tasksState.count} 件事没勾完呢`);
+        } else {
+          sendQuip();
+        }
+        scheduleQuip();
+      }, 180000 + Math.random() * 240000);
       quipTimer.unref?.();
     };
     scheduleQuip();
@@ -267,6 +279,88 @@ module.exports = {
       while (playbacks.size > 40) playbacks.delete(playbacks.keys().next().value);
     };
 
+    /* --- seasonal gate --------------------------------------------------------- */
+
+    /* Packs may mark anims with `season: [10, 11]` (1-12 months). The sprite
+       only ever sees what is in season right now — idle pools, click reactions
+       and the context menu all derive from this list. */
+    const monthNow = () => new Date().getMonth() + 1;
+    const activeAnims = () => pack.cfg.anims.filter(a => !Array.isArray(a.season) || a.season.includes(monthNow()));
+
+    /* --- file drop: the pet as a toolbox entry point -------------------------- */
+
+    /* Drop a file onto the pet (pet.js reports {path,name,size} from the DOM
+       drop event). A conservative extension table routes it to the plugin
+       best suited to open it, through the same navigate-to payload the
+       palettes use — json-editor, memo, and codec-lab's auto image preview
+       all consume payloads without knowing this plugin exists. */
+    const TEXT_ROUTES = {
+      '.json': { pluginId: 'json-editor', label: { zh: 'JSON 编辑器', en: 'JSON Editor' }, type: 'application/json' },
+      '.md': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+      '.markdown': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+      '.txt': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+      '.log': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+      '.csv': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+      '.svg': { pluginId: 'memo', label: { zh: '备忘录', en: 'Memo' }, type: 'text/plain' },
+    };
+    const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
+    const MAX_TEXT_BYTES = 512 * 1024;
+    const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+
+    async function handleFileDrop({ path: fp, name } = {}) {
+      const nm = String(name || (typeof fp === 'string' ? path.basename(fp) : '')).slice(0, 60);
+      const say = text => send('bubble', { text });
+      if (typeof fp !== 'string' || !fp) return { ok: false, error: 'no path' };
+      let st;
+      try { st = fs.statSync(fp); } catch { say(`我打不开「${nm}」`); return { ok: false, error: 'unreadable' }; }
+      if (!st.isFile()) { say('我只接单个文件'); return { ok: false, error: 'not a file' }; }
+      const ext = path.extname(nm || fp).toLowerCase();
+      const route = TEXT_ROUTES[ext];
+      const isImage = IMAGE_EXTS.has(ext);
+      if (!route && !isImage) { say(`「${ext || nm}」我还不知道怎么处理`); return { ok: false, error: 'unhandled' }; }
+      const tooBig = st.size > (isImage ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES);
+      if (tooBig) { say(`「${nm}」太大了（限 ${isImage ? '3MB 图片' : '512KB 文本'}）`); return { ok: false, error: 'too large' }; }
+      let payload;
+      try {
+        payload = route
+          ? { type: route.type, value: fs.readFileSync(fp, 'utf8').slice(0, MAX_TEXT_BYTES) }
+          : { type: 'text/base64', value: fs.readFileSync(fp).toString('base64') }; // codec-lab sniffs the image bytes back out
+      } catch (err) { say(`读「${nm}」失败了：${String(err.message).slice(0, 40)}`); return { ok: false, error: err.message }; }
+      const target = route ? route.pluginId : 'codec-lab';
+      const label = route ? route.label : { zh: '编码实验室', en: 'Codec Lab' };
+      const opened = typeof ctx.openPluginPanel === 'function' && ctx.openPluginPanel(target, payload);
+      if (!opened) { say(`工具箱没能打开${label.zh}`); return { ok: false, error: 'open failed' }; }
+      if (hasAnim('happy')) { ensureWindow(); send('play', { anim: 'happy', once: true, playbackId: null }); }
+      say(typeof ctx.openPluginPanel === 'function'
+        ? `「${nm}」交给${label.zh}啦`
+        : `「${nm}」已处理`);
+      return { ok: true, pluginId: target, name: nm };
+    }
+
+    /* --- todo badge from memo -------------------------------------------------- */
+
+    /* A red corner badge mirrors the unchecked task lines memo keeps. Polling
+       goes through the core callPlugin surface — no file-format coupling. */
+    let tasksState = { count: 0, lastNag: 0 };
+    let tasksTimer = null;
+    async function pollTasks() {
+      if (!prefs.tasksOn || typeof ctx.callPlugin !== 'function') return;
+      let open = 0;
+      try {
+        const data = await ctx.callPlugin('memo', 'list');
+        for (const n of (data && Array.isArray(data.notes) ? data.notes : [])) {
+          for (const line of String(n.content || '').split('\n')) {
+            if (/^\s*[-*+]\s+\[ \]/.test(line)) open++;
+          }
+        }
+      } catch { /* memo disabled or gone — badge sleeps quietly */ }
+      if (tasksState.count !== open) {
+        tasksState.count = open;
+        send('tasks', { count: open });
+        pushState();
+      }
+    }
+
     /* --- sprite-window ipc --------------------------------------------------- */
 
     const on = (channel, fn) => {
@@ -278,7 +372,7 @@ module.exports = {
       on('ready', e => {
         try {
           e.sender.send(`${P}init`, {
-            pack: pack.cfg,
+            pack: { ...pack.cfg, anims: activeAnims() },
             packDir: pack.dirName,
             assetBase: `plugin://${ctx.id}/pets/${pack.dirName}/`,
             prefs: prefsPayload(),
@@ -298,6 +392,10 @@ module.exports = {
       on('playback-report', (_e, { id, status } = {}) => {
         if (id && playbacks.has(id)) notePlayback(id, { status });
       }),
+      on('file-drop', (_e, info) => { handleFileDrop(info).catch(() => {}); }),
+      on('tasks-click', () => {
+        if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('memo');
+      }),
       // movement / drag: clamp into a real display so the pet can't get lost
       on('set-bounds', (_e, b) => {
         if (!b) return;
@@ -309,15 +407,16 @@ module.exports = {
         try { petWin.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* raced close */ }
       }),
       on('context-menu', () => {
-        const animItems = pack.cfg.anims.filter(a => a.role !== 'walk').map(a => ({
+        const animItems = activeAnims().filter(a => a.role !== 'walk').map(a => ({
           label: `▶ ${a.name}`,
-          click: () => send('play', { anim: a.name, once: a.once !== false }),
+          click: () => send('play', { anim: a.name, once: a.once !== false, playbackId: null }),
         }));
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
         Menu.buildFromTemplate([
           ...animItems,
           { type: 'separator' },
           { label: '说一句 / Say something', click: () => sendQuip() },
+          { label: '回到默认位置 / Spring home', click: () => api.resetPosition() },
           {
             label: (prefs.bubbleOn ? '关闭气泡' : '开启气泡') + ' / Bubble',
             click: () => { prefs.bubbleOn = !prefs.bubbleOn; savePrefs(); send('prefs', prefsPayload()); pushState(); },
@@ -361,6 +460,11 @@ module.exports = {
         if (typeof args.bubbleOn === 'boolean') prefs.bubbleOn = args.bubbleOn;
         if (typeof args.voiceOn === 'boolean') prefs.voiceOn = args.voiceOn;
         if (typeof args.wfOn === 'boolean') prefs.wfOn = args.wfOn;
+        if (typeof args.tasksOn === 'boolean') {
+          prefs.tasksOn = args.tasksOn;
+          if (!args.tasksOn) { tasksState.count = 0; send('tasks', { count: 0 }); }
+          else pollTasks();
+        }
         if (args.lang === 'zh' || args.lang === 'en') prefs.lang = args.lang;
         if (typeof args.size === 'number' && args.size >= 120 && args.size <= 480 && args.size !== prefs.size) {
           prefs.size = Math.round(args.size);
@@ -388,9 +492,12 @@ module.exports = {
         return { ok: true };
       },
       quip: (args = {}) => sendQuip(args && args.text),
+      /* programmatic file drop (same router as the DOM drop; used by smoke
+         and available to future workflow action nodes) */
+      fileDrop: (args = {}) => handleFileDrop(args),
       play: (args = {}) => {
         if (!args.anim) return { ok: false, error: 'anim required' };
-        const anim = pack.cfg.anims.find(a => a.name === args.anim);
+        const anim = activeAnims().find(a => a.name === args.anim);
         if (!anim) return { ok: false, error: 'unknown anim' };
         if (isLocked() && args.lock !== lock.id) {
           return { ok: false, reason: args.lock ? 'lock-lost' : 'lock-required' };
@@ -449,9 +556,12 @@ module.exports = {
       resetPosition: () => {
         const { width, height } = winSize(prefs.size);
         const def = defaultPos(width, height);
-        const pos = applyBounds(def.x, def.y, width, height);
-        if (pos) { prefs.x = pos.x; prefs.y = pos.y; savePrefs(); }
-        return { ok: true };
+        const pos = clampPos(def.x, def.y, width, height);
+        prefs.x = pos.x; prefs.y = pos.y; savePrefs();
+        // spring it home when visible; teleport only for hidden/dead windows
+        if (petWin && !petWin.isDestroyed() && petWin.isVisible()) send('spring', { x: pos.x, y: pos.y });
+        else applyBounds(pos.x, pos.y, width, height);
+        return { ok: true, x: pos.x, y: pos.y };
       },
     };
 
@@ -468,11 +578,11 @@ module.exports = {
     /* The toolbox's own orchestration gets a live on-shoulder audience:
        working while a run flies, celebrate/error at the finish line, plus a
        bubble. A takeover lock or the panel kill-switch (wfOn) silences it. */
-    const hasAnim = name => pack.cfg.anims.some(a => a.name === name);
+    const hasAnim = name => activeAnims().some(a => a.name === name);
     const playStateAnim = (name) => {
       if (!prefs.visible || !hasAnim(name) || isLocked()) return;
       ensureWindow();
-      const anim = pack.cfg.anims.find(a => a.name === name);
+      const anim = activeAnims().find(a => a.name === name);
       send('play', { anim: name, once: !!anim.once, playbackId: null });
     };
     const reactBubble = (text) => {
@@ -511,10 +621,16 @@ module.exports = {
     screen.on('display-removed', onDisplayChange);
 
     if (prefs.visible) ensureWindow();
+    const tasksBoot = setTimeout(() => pollTasks(), 1200);
+    tasksBoot.unref?.();
+    tasksTimer = setInterval(() => pollTasks(), 60000);
+    tasksTimer.unref?.();
 
     teardown = () => {
       clearTimeout(savePosTimer);
       clearTimeout(quipTimer);
+      clearTimeout(tasksBoot);
+      clearInterval(tasksTimer);
       clearInterval(topmostTimer);
       if (unsubWf) { try { unsubWf(); } catch { /* core already gone */ } }
       screen.removeListener('display-metrics-changed', onDisplayChange);
