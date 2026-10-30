@@ -1,0 +1,20 @@
+{
+  "id": "orbitian",
+  "name": { "zh": "小轨", "en": "Orbitian" },
+  "version": "0.1.0",
+  "author": "Ikaros-521",
+  "license": "MIT",
+  "credit": {
+    "zh": "Orbit Toolbox 原创吉祥物，程序化生成的示例宠物包",
+    "en": "Original Orbit Toolbox mascot — procedurally generated sample pack"
+  },
+  "canvas": { "w": 320, "h": 180 },
+  "defaultSize": 240,
+  "defaultFacing": "right",
+  "anims": [
+    { "name": "idle",  "file": "idle.webm",  "weight": 4, "role": "idle" },
+    { "name": "walk",  "file": "walk.webm",  "weight": 0, "role": "walk" },
+    { "name": "happy", "file": "happy.webm", "weight": 1, "role": "click", "once": true },
+    { "name": "sleep", "file": "sleep.webm", "weight": 1, "role": "idle" }
+  ]
+}

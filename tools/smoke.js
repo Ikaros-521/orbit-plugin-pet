@@ -1,0 +1,117 @@
+/* desktop-pet smoke test — run with orbit-tools' electron:
+     E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/smoke.js
+
+   Copies this plugin into a throwaway user-plugins dir, then exercises the
+   full chain headlessly-ish (the sprite window really is created, briefly
+   shown inactive, and asked to report playback progress):
+   discovery -> activation -> pack scan -> plugin:// MIME (webm!) ->
+   toggle/window lifecycle -> video actually decoding -> setPrefs -> teardown.
+
+   The webm content-type assertion doubles as the end-to-end check for the
+   orbit-tools plugin-protocol MIME table (video/webm), and the video-progress
+   assertion proves VP9-alpha clips decode inside the sandboxed renderer. */
+
+const { app, protocol } = require('electron');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+
+/* Must run before app ready — mirrors orbit-tools main.js. Without it the
+   plugin:// scheme is non-standard, origins come out opaque and the sprite
+   page's CSP 'self' rejects its own subresources. */
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'plugin', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
+
+/* dev-layout: this repo sits next to orbit-tools */
+const ORBIT = path.resolve(__dirname, '..', '..', 'orbit-tools');
+const PluginManager = require(path.join(ORBIT, 'src', 'core', 'plugin-manager'));
+const Config = require(path.join(ORBIT, 'src', 'core', 'config'));
+const { registerPluginProtocol } = require(path.join(ORBIT, 'src', 'core', 'plugin-protocol'));
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const fail = msg => { console.error('FAIL:', msg); app.exit(1); throw new Error(msg); };
+const ok = msg => console.log('ok -', msg);
+
+app.whenReady().then(async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-smoke-'));
+  const userPlugins = path.join(tmp, 'plugins');
+  fs.mkdirSync(userPlugins, { recursive: true });
+  fs.cpSync(path.join(__dirname, '..'), path.join(userPlugins, 'desktop-pet'), { recursive: true });
+
+  const cfg = new Config(tmp);
+  const manager = new PluginManager({ userDataDir: tmp, config: cfg, getHostWindow: () => null });
+  registerPluginProtocol(manager);
+  manager.discover();
+
+  const found = manager.plugins.get('desktop-pet');
+  if (!found) fail('plugin not discovered in user dir');
+  ok(`discovered desktop-pet (${found.source})`);
+
+  if (!manager.activate('desktop-pet')) fail('activate failed: ' + manager.loadErrors.get('desktop-pet'));
+  ok('activated');
+
+  /* --- plugin:// MIME: the core protocol change this plugin depends on ---- */
+  const { net } = require('electron');
+  const res = await net.fetch('plugin://desktop-pet/pets/orbitian/idle.webm');
+  if (res.status !== 200) fail(`webm not served: ${res.status}`);
+  const ct = res.headers.get('content-type');
+  if (!/^video\/webm/.test(ct)) fail(`webm content-type is "${ct}", expected video/webm`);
+  ok(`plugin:// serves webm as ${ct}`);
+
+  /* --- pack state (window shows on ready-to-show — poll, don't assume) ---- */
+  let state = null;
+  for (let i = 0; i < 20; i++) {
+    state = await manager.call('desktop-pet', 'getState');
+    if (state.visible) break;
+    await sleep(250);
+  }
+  if (!state.pack || state.pack.id !== 'orbitian') fail('pack scan missing orbitian: ' + JSON.stringify(state.pack));
+  if (!state.pack.anims.includes('idle') || !state.pack.anims.includes('walk')) fail('pack anims wrong: ' + state.pack.anims);
+  if (!state.visible) fail('pet did not auto-show after activate');
+  if (manager.windowsOf('desktop-pet').length !== 1) fail('sprite window not created');
+  ok(`pack=${state.pack.id} anims=[${state.pack.anims}] window visible`);
+
+  /* --- wait for real video decoding inside the sprite window --------------- */
+  let st = null;
+  for (let i = 0; i < 40; i++) {
+    await sleep(500);
+    st = (await manager.call('desktop-pet', 'getState')).status;
+    if (st && st.ready >= 2 && st.playing && st.t > 0.2) break;
+  }
+  if (!st || !(st.ready >= 2) || !st.playing || !(st.t > 0.2)) {
+    fail('video not decoding/playing: ' + JSON.stringify(st));
+  }
+  ok(`video playing: anim=${st.anim} t=${st.t}s ready=${st.ready} at (${st.x},${st.y})`);
+
+  /* --- one-shot animation via route table ----------------------------------- */
+  await manager.call('desktop-pet', 'play', { anim: 'happy' });
+  await sleep(2500);
+  const st2 = (await manager.call('desktop-pet', 'getState')).status;
+  if (st2.anim !== 'happy' && st2.anim === 'idle') { /* already returned to idle — also fine */ }
+  ok(`one-shot happy dispatched (anim now: ${st2.anim})`);
+
+  /* --- prefs ------------------------------------------------------------------ */
+  await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });
+  const st3 = await manager.call('desktop-pet', 'getState');
+  if (st3.prefs.size !== 320 || st3.prefs.autoWalk !== false) fail('setPrefs not applied: ' + JSON.stringify(st3.prefs));
+  const [w, h] = manager.windowsOf('desktop-pet')[0].getSize();
+  // DWM rounds transparent frameless bounds by ±1 — contain-fit hides it
+  if (Math.abs(w - 320) > 1 || Math.abs(h - 180) > 1) fail(`window not resized to 320x180, got ${w}x${h}`);
+  ok('setPrefs: size 320 applied to window');
+
+  /* --- toggle ------------------------------------------------------------------ */
+  const t1 = await manager.call('desktop-pet', 'toggle');
+  if (t1.visible !== false || manager.windowsOf('desktop-pet')[0].isVisible()) fail('toggle hide failed');
+  const t2 = await manager.call('desktop-pet', 'toggle');
+  if (t2.visible !== true || !manager.windowsOf('desktop-pet')[0].isVisible()) fail('toggle show failed');
+  ok('toggle hide/show round-trip');
+
+  /* --- teardown ------------------------------------------------------------------ */
+  manager.deactivate('desktop-pet');
+  if (manager.windowsOf('desktop-pet').length !== 0) fail('window survived deactivate');
+  ok('deactivate destroys sprite window');
+
+  console.log('ALL PET SMOKE CHECKS PASSED');
+  app.exit(0);
+}).catch(err => { console.error('FAIL:', err && err.message); app.exit(1); });

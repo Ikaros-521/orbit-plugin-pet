@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'" />
+  <title>desktop-pet</title>
+  <link rel="stylesheet" href="pet.css" />
+</head>
+<body>
+  <div id="stage">
+    <!-- A/B double buffer: the incoming animation loads and starts in the
+         back element, then the buffers swap — transitions never flash. -->
+    <video id="va" muted playsinline></video>
+    <video id="vb" muted playsinline></video>
+  </div>
+  <script src="pet.js"></script>
+</body>
+</html>

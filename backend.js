@@ -1,0 +1,312 @@
+/* desktop-pet backend.
+   Owns the transparent always-on-top sprite window, discovers pet packs
+   under pets/, and exposes the petApi service on a cordis-lite pseudo-ctx
+   (see compat/pseudo-ctx.js) so the panel, the window and future DSH-derived
+   companions all talk to one route table.
+
+   Window geometry: the window is exactly the pet video (size pref = displayed
+   width). The renderer drives movement via throttled set-bounds requests and
+   runs toss physics itself; this side clamps every request into a real
+   display's work area so a vanished monitor can't strand the pet off-screen.
+   Rendering techniques (A/B video swap, forward-mode click-through, topmost
+   watchdog) are adopted from dsh-pet's desktop runtime (MIT). */
+
+const { ipcMain, screen, Menu } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const { createPseudoCtx } = require('./compat/pseudo-ctx');
+
+const P = 'desktop-pet:'; // ipc channel namespace for the sprite window
+const TOPMOST_TICK_MS = 8000;
+
+let teardown = null; // set by activate; deactivate runs it
+
+module.exports = {
+  activate(ctx) {
+    /* --- prefs + packs ------------------------------------------------------ */
+
+    const prefs = {
+      pack: 'orbitian',
+      size: 240,
+      visible: true,
+      autoWalk: true,
+      x: null,
+      y: null,
+      ...ctx.data.get(),
+    };
+    const savePrefs = () => ctx.data.set({ ...prefs });
+
+    /* A pack is pets/<id>/pet.json + its webm files. Entries whose files are
+       missing are dropped here, not at play time. */
+    function scanPacks() {
+      const root = path.join(ctx.root, 'pets');
+      const packs = [];
+      let entries = [];
+      try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* no pets dir */ }
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        let cfg;
+        try { cfg = JSON.parse(fs.readFileSync(path.join(root, ent.name, 'pet.json'), 'utf8')); }
+        catch { console.warn(`[desktop-pet] pets/${ent.name}: pet.json missing/invalid, skipped`); continue; }
+        const anims = (Array.isArray(cfg.anims) ? cfg.anims : []).filter(a =>
+          a && typeof a.name === 'string' && typeof a.file === 'string'
+          && fs.existsSync(path.join(root, ent.name, a.file)));
+        if (!anims.length) { console.warn(`[desktop-pet] pets/${ent.name}: no playable anims, skipped`); continue; }
+        packs.push({
+          id: cfg.id || ent.name,
+          dirName: ent.name,
+          cfg: { ...cfg, anims },
+        });
+      }
+      return packs;
+    }
+
+    let packs = scanPacks();
+    const packById = id => packs.find(p => p.id === id || p.dirName === id) || null;
+    let pack = packById(prefs.pack) || packs[0] || null;
+    if (!pack) throw new Error('no pet pack found under pets/');
+
+    /* --- sprite window ------------------------------------------------------ */
+
+    let petWin = null;
+    let topmostTimer = null;
+    let savePosTimer = null;
+    let lastStatus = null; // latest renderer status, surfaced for tests/panel
+
+    const canvas = pack.cfg.canvas || { w: 320, h: 180 };
+    const winSize = size => ({ width: Math.round(size), height: Math.round(size * canvas.h / canvas.w) });
+
+    function displays() {
+      return screen.getAllDisplays().map(d => ({
+        id: d.id,
+        bounds: d.bounds,
+        workArea: d.workArea,
+      }));
+    }
+
+    /* Keep x,y inside some display's work area. Pets walk the floor, so the
+       clamp is "nearest display to the requested point", not just the primary. */
+    function clampPos(x, y, w, h) {
+      const pt = { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
+      const d = screen.getDisplayNearestPoint(pt) || screen.getPrimaryDisplay();
+      const wa = d.workArea;
+      return {
+        x: Math.min(Math.max(Math.round(x), wa.x), wa.x + wa.width - w),
+        y: Math.min(Math.max(Math.round(y), wa.y), wa.y + wa.height - h),
+      };
+    }
+
+    function defaultPos(w, h) {
+      const wa = screen.getPrimaryDisplay().workArea;
+      return { x: wa.x + wa.width - w - 24, y: wa.y + wa.height - h - 12 };
+    }
+
+    function ensureWindow() {
+      if (petWin && !petWin.isDestroyed()) return petWin;
+      const { width, height } = winSize(prefs.size);
+      const pos = Number.isFinite(prefs.x) && Number.isFinite(prefs.y)
+        ? clampPos(prefs.x, prefs.y, width, height)
+        : defaultPos(width, height);
+      petWin = ctx.windows.create({
+        x: pos.x, y: pos.y, width, height,
+        frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        hasShadow: false,
+        resizable: false,
+        fullscreenable: false,
+        alwaysOnTop: true,
+        // unfocused pets must keep animating: throttling would freeze the walk loop
+        webPreferences: { preload: 'pet-preload.js', backgroundThrottling: false },
+      });
+      petWin.setAlwaysOnTop(true, 'screen-saver');
+      petWin.loadURL(ctx.url('pet.html'));
+      // showInactive: appearing must never steal focus from whatever the user is typing in
+      if (prefs.visible) petWin.once('ready-to-show', () => { if (!petWin.isDestroyed()) petWin.showInactive(); });
+      const savePos = () => {
+        if (!petWin || petWin.isDestroyed()) return;
+        const [x, y] = petWin.getPosition();
+        prefs.x = x; prefs.y = y;
+        clearTimeout(savePosTimer);
+        savePosTimer = setTimeout(savePrefs, 800);
+      };
+      petWin.on('moved', savePos);
+      petWin.on('closed', () => { petWin = null; });
+      return petWin;
+    }
+
+    /* Fullscreen apps and explorer restarts both demote topmost windows; a
+       cheap periodic reassert keeps the pet above ordinary windows (it never
+       fights real topmost competitors like task manager). */
+    topmostTimer = setInterval(() => {
+      if (petWin && !petWin.isDestroyed() && petWin.isVisible()) {
+        petWin.setAlwaysOnTop(true, 'screen-saver');
+      }
+    }, TOPMOST_TICK_MS);
+    topmostTimer.unref?.();
+
+    const send = (channel, payload) => {
+      if (petWin && !petWin.isDestroyed()) petWin.webContents.send(`${P}${channel}`, payload);
+    };
+
+    const stateFor = () => ({
+      pack: { id: pack.id, name: pack.cfg.name || pack.id, version: pack.cfg.version || '0.0.0', author: pack.cfg.author || '', credit: pack.cfg.credit || null, anims: pack.cfg.anims.map(a => a.name) },
+      packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id })),
+      prefs: { pack: pack.id, size: prefs.size, visible: prefs.visible, autoWalk: prefs.autoWalk },
+      visible: !!(petWin && !petWin.isDestroyed() && petWin.isVisible()),
+      status: lastStatus,
+    });
+    const pushState = () => ctx.send('state', stateFor());
+
+    /* --- sprite-window ipc --------------------------------------------------- */
+
+    const on = (channel, fn) => {
+      const ch = `${P}${channel}`;
+      ipcMain.on(ch, fn);
+      return () => ipcMain.removeListener(ch, fn);
+    };
+    const offs = [
+      on('ready', e => {
+        try {
+          e.sender.send(`${P}init`, {
+            pack: pack.cfg,
+            packDir: pack.dirName,
+            assetBase: `plugin://${ctx.id}/pets/${pack.dirName}/`,
+            prefs: { size: prefs.size, autoWalk: prefs.autoWalk, visible: prefs.visible },
+            displays: displays(),
+          });
+        } catch { /* window torn down mid-handshake */ }
+      }),
+      on('status', (_e, s) => { lastStatus = s; }),
+      // movement / drag: clamp into a real display so the pet can't get lost
+      on('set-bounds', (_e, b) => {
+        if (!petWin || petWin.isDestroyed() || !b) return;
+        const { width, height } = winSize(prefs.size);
+        const pos = clampPos(b.x, b.y, width, height);
+        try { petWin.setBounds({ x: pos.x, y: pos.y, width, height }); } catch { /* raced close */ }
+      }),
+      on('set-ignore', (_e, { ignore } = {}) => {
+        if (!petWin || petWin.isDestroyed()) return;
+        try { petWin.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* raced close */ }
+      }),
+      on('context-menu', () => {
+        const animItems = pack.cfg.anims.filter(a => a.role !== 'walk').map(a => ({
+          label: `▶ ${a.name}`,
+          click: () => send('play', { anim: a.name, once: a.once !== false }),
+        }));
+        const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
+        Menu.buildFromTemplate([
+          ...animItems,
+          { type: 'separator' },
+          { label: toggleLabel, click: () => { api.toggle(); } },
+          { label: '宠物设置 / Pet settings', click: () => openHostPanel() },
+        ]).popup({ window: petWin });
+      }),
+    ];
+
+    function openHostPanel() {
+      const host = ctx.getHostWindow && ctx.getHostWindow();
+      if (host && !host.isDestroyed()) {
+        if (host.isMinimized()) host.restore();
+        host.show();
+        host.focus();
+        host.webContents.send('open-plugin', ctx.id);
+      }
+    }
+
+    /* --- petApi route table (panel + future companions) ---------------------- */
+
+    const api = {
+      getState: () => stateFor(),
+      toggle: () => {
+        prefs.visible = !(petWin && !petWin.isDestroyed() && petWin.isVisible());
+        if (prefs.visible) { ensureWindow(); petWin.showInactive(); }
+        else if (petWin && !petWin.isDestroyed()) petWin.hide();
+        savePrefs();
+        pushState();
+        return { ok: true, visible: prefs.visible };
+      },
+      setPrefs: (args = {}) => {
+        let reload = false;
+        if (typeof args.autoWalk === 'boolean') prefs.autoWalk = args.autoWalk;
+        if (typeof args.size === 'number' && args.size >= 120 && args.size <= 480 && args.size !== prefs.size) {
+          prefs.size = Math.round(args.size);
+          if (petWin && !petWin.isDestroyed()) {
+            const [x, y] = petWin.getPosition();
+            const { width, height } = winSize(prefs.size);
+            const pos = clampPos(x, y, width, height);
+            petWin.setBounds({ ...pos, width, height });
+          }
+        }
+        if (typeof args.pack === 'string') {
+          const next = packById(args.pack);
+          if (next && next.id !== pack.id) { pack = next; prefs.pack = pack.id; reload = true; }
+        }
+        savePrefs();
+        if (reload && petWin && !petWin.isDestroyed()) {
+          // pack swap = fresh handshake: destroy the window, recreate lazily
+          petWin.destroy();
+          petWin = null;
+          ensureWindow();
+        } else {
+          send('prefs', { size: prefs.size, autoWalk: prefs.autoWalk });
+        }
+        pushState();
+        return { ok: true };
+      },
+      play: (args = {}) => {
+        if (!args.anim) return { ok: false, error: 'anim required' };
+        if (!pack.cfg.anims.some(a => a.name === args.anim)) return { ok: false, error: 'unknown anim' };
+        if (prefs.visible) { ensureWindow(); send('play', { anim: args.anim, once: args.once !== false }); }
+        return { ok: true };
+      },
+      resetPosition: () => {
+        if (petWin && !petWin.isDestroyed()) {
+          const { width, height } = winSize(prefs.size);
+          const pos = defaultPos(width, height);
+          petWin.setBounds({ ...pos, width, height });
+          prefs.x = pos.x; prefs.y = pos.y;
+          savePrefs();
+        }
+        return { ok: true };
+      },
+    };
+
+    /* Route table goes on a pseudo-ctx under the service name DSH companions
+       would inject — the pattern any future dsh-derived plugin reuses. */
+    const pctx = createPseudoCtx();
+    pctx.set('petApi', api);
+    const petApi = pctx.get('petApi');
+
+    for (const [method, fn] of Object.entries(petApi)) ctx.ipc.handle(method, fn);
+
+    /* --- lifecycle ------------------------------------------------------------ */
+
+    const onDisplayChange = () => {
+      if (petWin && !petWin.isDestroyed()) {
+        const [x, y] = petWin.getPosition();
+        const { width, height } = winSize(prefs.size);
+        const pos = clampPos(x, y, width, height);
+        try { petWin.setBounds({ ...pos, width, height }); } catch { /* raced close */ }
+      }
+      send('displays', displays());
+    };
+    screen.on('display-metrics-changed', onDisplayChange);
+    screen.on('display-removed', onDisplayChange);
+
+    if (prefs.visible) ensureWindow();
+
+    teardown = () => {
+      clearTimeout(savePosTimer);
+      clearInterval(topmostTimer);
+      screen.removeListener('display-metrics-changed', onDisplayChange);
+      screen.removeListener('display-removed', onDisplayChange);
+      for (const off of offs) off();
+      pctx.dispose();
+      // window itself is destroyed by the plugin manager's windows teardown
+      petWin = null;
+    };
+  },
+
+  deactivate() { if (teardown) { teardown(); teardown = null; } },
+};
