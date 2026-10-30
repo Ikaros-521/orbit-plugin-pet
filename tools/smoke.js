@@ -257,14 +257,27 @@ app.whenReady().then(async () => {
   }
   ok('resetPosition glides home on a damped spring');
 
+  /* --- TTS routes & prefs ----------------------------------------------------- */
+  const voicesRes = await manager.call('desktop-pet', 'getVoices');
+  if (!voicesRes || !voicesRes.ok || !Array.isArray(voicesRes.voices) || voicesRes.voices.length < 8) {
+    fail('getVoices route failed: ' + JSON.stringify(voicesRes));
+  }
+  ok(`getVoices returned ${voicesRes.voices.length} preset voices`);
+
   /* --- prefs ------------------------------------------------------------------ */
-  await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });
+  await manager.call('desktop-pet', 'setPrefs', {
+    size: 320, autoWalk: false,
+    voiceOn: true, voiceEngine: 'edge-tts',
+    voice: 'zh-CN-XiaoyiNeural', voiceRate: 10, voicePitch: 20,
+  });
   const st3 = await manager.call('desktop-pet', 'getState');
-  if (st3.prefs.size !== 320 || st3.prefs.autoWalk !== false) fail('setPrefs not applied: ' + JSON.stringify(st3.prefs));
+  if (st3.prefs.size !== 320 || st3.prefs.autoWalk !== false || st3.prefs.voicePitch !== 20 || st3.prefs.voiceRate !== 10) {
+    fail('setPrefs not applied: ' + JSON.stringify(st3.prefs));
+  }
   const [w, h] = manager.windowsOf('desktop-pet')[0].getContentSize();
   // 320 -> video 180 + margin 160 = 340 (DWM rounds transparent bounds ±1)
   if (Math.abs(w - 320) > 4 || Math.abs(h - 340) > 4) fail(`window not resized to 320x340, got ${w}x${h}`);
-  ok('setPrefs: size 320 applied to window (margin scaled too)');
+  ok('setPrefs: size 320 & voice settings applied to window');
 
   /* --- toggle ------------------------------------------------------------------ */
   const t1 = await manager.call('desktop-pet', 'toggle');

@@ -15,6 +15,7 @@ const { ipcMain, screen, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { createPseudoCtx } = require('./compat/pseudo-ctx');
+const { ttsService, PRESET_VOICES, DEFAULT_VOICE_ZH, DEFAULT_VOICE_EN } = require('./services/tts');
 
 const P = 'desktop-pet:'; // ipc channel namespace for the sprite window
 const TOPMOST_TICK_MS = 8000;
@@ -32,6 +33,10 @@ module.exports = {
       autoWalk: true,
       bubbleOn: true,
       voiceOn: false,
+      voiceEngine: 'edge-tts',             // 'edge-tts' | 'system'
+      voice: DEFAULT_VOICE_ZH,             // 'zh-CN-XiaoyiNeural'
+      voiceRate: 0,                        // speed offset: -30 ~ +30 (%)
+      voicePitch: 0,                       // pitch offset: 0 ~ +40 (Hz)
       wfOn: true,          // react to workflow runs with state animations
       tasksOn: true,       // unchecked-todo badge mirrored from memo
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
@@ -196,7 +201,9 @@ module.exports = {
     const pushState = () => ctx.send('state', stateFor());
     const prefsPayload = () => ({
       size: prefs.size, autoWalk: prefs.autoWalk, bubbleOn: prefs.bubbleOn,
-      voiceOn: prefs.voiceOn, wfOn: prefs.wfOn, tasksOn: prefs.tasksOn,
+      voiceOn: prefs.voiceOn, voiceEngine: prefs.voiceEngine, voice: prefs.voice,
+      voiceRate: prefs.voiceRate, voicePitch: prefs.voicePitch,
+      wfOn: prefs.wfOn, tasksOn: prefs.tasksOn,
       lang: prefs.lang, margin: marginH(prefs.size),
     });
 
@@ -229,13 +236,36 @@ module.exports = {
       return pool[Math.floor(Math.random() * pool.length)];
     };
     let quipTimer = null;
-    const sendQuip = (text) => {
+    let quipSeq = 0;
+    const sendQuip = async (text) => {
       if (!prefs.bubbleOn) return { ok: false, error: 'bubble is off' };
       if (text === undefined && isLocked()) return { ok: false, error: 'locked' }; // self-chatter yields to a takeover
       const rt = petWin && !petWin.isDestroyed() && petWin.isVisible();
       if (!rt) return { ok: false, error: 'pet is hidden' };
       const body = typeof text === 'string' && text.trim() ? text.trim().slice(0, 200) : pickQuip();
-      send('bubble', { text: body });
+      const mySeq = ++quipSeq;
+
+      if (prefs.voiceOn && prefs.voiceEngine === 'edge-tts') {
+        try {
+          const ttsRes = await ttsService.synthesize({
+            text: body,
+            voice: prefs.voice,
+            rate: prefs.voiceRate,
+            pitch: prefs.voicePitch,
+            lang: prefs.lang || 'zh',
+          });
+          if (mySeq !== quipSeq) return { ok: true, dropped: true };
+          if (ttsRes && ttsRes.ok && ttsRes.audioUrl) {
+            send('bubble', { text: body, audioUrl: ttsRes.audioUrl, duration: ttsRes.duration, engine: 'edge-tts' });
+            return { ok: true, text: body, audioUrl: ttsRes.audioUrl };
+          }
+        } catch { /* synthesize error, fallback below */ }
+        if (mySeq === quipSeq) {
+          send('bubble', { text: body, engine: 'system', fallback: true });
+        }
+      } else {
+        send('bubble', { text: body, engine: 'system' });
+      }
       return { ok: true, text: body };
     };
     const scheduleQuip = () => {
@@ -459,6 +489,10 @@ module.exports = {
         if (typeof args.autoWalk === 'boolean') prefs.autoWalk = args.autoWalk;
         if (typeof args.bubbleOn === 'boolean') prefs.bubbleOn = args.bubbleOn;
         if (typeof args.voiceOn === 'boolean') prefs.voiceOn = args.voiceOn;
+        if (args.voiceEngine === 'edge-tts' || args.voiceEngine === 'system') prefs.voiceEngine = args.voiceEngine;
+        if (typeof args.voice === 'string' && args.voice.trim()) prefs.voice = args.voice.trim();
+        if (typeof args.voiceRate === 'number' && Number.isFinite(args.voiceRate)) prefs.voiceRate = Math.max(-30, Math.min(50, Math.round(args.voiceRate)));
+        if (typeof args.voicePitch === 'number' && Number.isFinite(args.voicePitch)) prefs.voicePitch = Math.max(0, Math.min(50, Math.round(args.voicePitch)));
         if (typeof args.wfOn === 'boolean') prefs.wfOn = args.wfOn;
         if (typeof args.tasksOn === 'boolean') {
           prefs.tasksOn = args.tasksOn;
@@ -553,6 +587,21 @@ module.exports = {
         if (!p) return { ok: false, reason: 'unknown-playback' };
         return { ok: true, id, ...p };
       },
+      /* TTS voices & live preview */
+      getVoices: () => ({ ok: true, voices: ttsService.getPresetVoices() }),
+      previewVoice: async (args = {}) => {
+        const sample = (prefs.lang === 'en' || args.lang === 'en')
+          ? 'Hello! I am your desktop pet, nice to meet you!'
+          : '你好呀，我是小轨桌宠，今天也要开开心心哦！';
+        const text = (typeof args.text === 'string' && args.text.trim()) ? args.text.trim() : sample;
+        return ttsService.synthesize({
+          text,
+          voice: args.voice || prefs.voice,
+          rate: args.rate !== undefined ? args.rate : prefs.voiceRate,
+          pitch: args.pitch !== undefined ? args.pitch : prefs.voicePitch,
+          lang: args.lang || prefs.lang || 'zh',
+        });
+      },
       resetPosition: () => {
         const { width, height } = winSize(prefs.size);
         const def = defaultPos(width, height);
@@ -587,7 +636,7 @@ module.exports = {
     };
     const reactBubble = (text) => {
       if (prefs.bubbleOn && !isLocked() && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
-        send('bubble', { text });
+        sendQuip(text);
       }
     };
     let unsubWf = null;

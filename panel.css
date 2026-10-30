@@ -35,6 +35,20 @@
 .dpet-hint { font-size: 11px; color: var(--ink-faint); }
 .dpet-quip-result { font-size: 12px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* --- voice options nested box ------------------------------------------------- */
+.dpet-voice-opts {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 10px 14px; margin-left: 20px;
+  border-left: 2px solid var(--amber, #e8a13c);
+  background: var(--surface-subtle, rgba(255, 255, 255, 0.03));
+  border-radius: 0 var(--r-sm, 6px) var(--r-sm, 6px) 0;
+}
+.dpet-edge-opts { display: flex; flex-direction: column; gap: 10px; }
+.dpet-voice-engine, .dpet-voice-select { flex: 1 1 auto; min-width: 0; width: auto; font-family: inherit; }
+.dpet-voice-rate, .dpet-voice-pitch { flex: 1 1 auto; accent-color: var(--amber, #e8a13c); }
+.dpet-voice-rate-val, .dpet-voice-pitch-val { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--ink); min-width: 48px; text-align: right; }
+.dpet-preview-status { font-size: 12px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* --- info lines ----------------------------------------------------------------- */
 .dpet-info { gap: 4px; font-size: 12px; color: var(--ink-faint); border-style: dashed; }
 .dpet-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
