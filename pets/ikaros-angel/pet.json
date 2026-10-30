@@ -1,0 +1,32 @@
+{
+  "id": "ikaros-angel",
+  "name": { "zh": "伊卡洛斯（天使）", "en": "Ikaros (Angel)" },
+  "version": "0.1.0",
+  "author": "model: 胡来的螺丝 / pack config: Ikaros-521",
+  "license": {
+    "pack": "MIT",
+    "model": "user-provided — lives OUTSIDE this repo; subject to its own notice (non-commercial, keep attribution intact). Bind its directory in the pet panel."
+  },
+  "credit": {
+    "zh": "Live2D 模型由用户提供（例：E:\\Ikaros_Live2D），本仓库不含模型文件",
+    "en": "Live2D model is user-provided (e.g. E:\\Ikaros_Live2D); this repo ships no model files"
+  },
+  "engine": "live2d",
+  "model": "model/cat.model3.json",
+  "canvas": { "w": 300, "h": 340 },
+  "defaultSize": 260,
+  "defaultFacing": "right",
+  "bubbleAnchor": { "x": 0.5 },
+  "live2d": {
+    "fit": 0.95,
+    "footY": 0.97,
+    "idle": { "group": "CAT_motion", "index": [0, 1] },
+    "click": { "group": "CAT_motion", "index": 1 },
+    "walk": { "group": "CAT_motion", "index": 0 },
+    "working": { "group": "CAT_motion", "index": 0 },
+    "thinking": { "group": "CAT_motion", "index": 1 },
+    "waiting": { "group": "CAT_motion_lock", "index": 0 },
+    "celebrate": { "expression": "live2d_expression0.exp3.json", "hold": 2600 },
+    "error": { "expression": "live2d_expression2.exp3.json", "hold": 2600 }
+  }
+}

@@ -52,6 +52,11 @@
               <span class="dpet-row-label">${LABELS.pack()}</span>
               <select class="dpet-pack input"></select>
             </label>
+            <div class="dpet-row dpet-modelrow dpet-hidden">
+              <span class="dpet-row-label">${t('模型目录', 'Model dir')}</span>
+              <code class="dpet-model-dir" title=""></code>
+              <button type="button" class="dpet-model btn ghost small">${t('绑定…', 'Bind…')}</button>
+            </div>
             <label class="dpet-row dpet-check">
               <input class="dpet-walk" type="checkbox" />
               <span class="dpet-row-label">${LABELS.autoWalk()}</span>
@@ -75,15 +80,11 @@
                   <option value="system">${t('系统本地语音', 'System local voice')}</option>
                 </select>
               </label>
+              <div class="dpet-system-hint" style="display:none;">${t('使用系统默认合成引擎，离线可用', 'Uses OS default speech engine, works offline')}</div>
               <div class="dpet-edge-opts">
                 <label class="dpet-row">
                   <span class="dpet-row-label">${t('宠物音色', 'Voice')}</span>
                   <select class="dpet-voice-select input small"></select>
-                </label>
-                <label class="dpet-row">
-                  <span class="dpet-row-label">${t('语速调节', 'Speed')}</span>
-                  <input class="dpet-voice-rate" type="range" min="-30" max="30" step="5" />
-                  <b class="dpet-voice-rate-val"></b>
                 </label>
                 <label class="dpet-row">
                   <span class="dpet-row-label">${t('音调微调', 'Pitch')}</span>
@@ -91,6 +92,11 @@
                   <b class="dpet-voice-pitch-val"></b>
                 </label>
               </div>
+              <label class="dpet-row">
+                <span class="dpet-row-label">${t('语速调节', 'Speed')}</span>
+                <input class="dpet-voice-rate" type="range" min="-30" max="30" step="5" />
+                <b class="dpet-voice-rate-val"></b>
+              </label>
               <div class="dpet-row">
                 <button type="button" class="dpet-voice-preview btn ghost small">${t('试听声音', 'Preview voice')}</button>
                 <span class="dpet-preview-status"></span>
@@ -127,9 +133,11 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
+        modelRow: $('.dpet-modelrow'), modelDir: $('.dpet-model-dir'), model: $('.dpet-model'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         tasks: $('.dpet-tasks'),
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
+        systemHint: $('.dpet-system-hint'),
         edgeOpts: $('.dpet-edge-opts'), voiceSelect: $('.dpet-voice-select'),
         voiceRate: $('.dpet-voice-rate'), voiceRateVal: $('.dpet-voice-rate-val'),
         voicePitch: $('.dpet-voice-pitch'), voicePitchVal: $('.dpet-voice-pitch-val'),
@@ -157,12 +165,18 @@
         const cur = els.pack.value;
         const options = state.packs.map(p => {
           const name = p.name && (L() ? p.name.en : p.name.zh) || p.id;
-          return `<option value="${p.id}">${name}</option>`;
+          const flag = p.engine === 'live2d' ? (p.needsModel ? ` (${t('未绑定模型', 'no model')})` : ' (Live2D)' ) : '';
+          return `<option value="${p.id}">${name}${flag}</option>`;
         }).join('');
         if (els.pack.innerHTML !== options) els.pack.innerHTML = options;
         els.pack.value = pack.id;
         if (els.pack.value !== pack.id && cur) els.pack.value = cur;
         if (els.pack.selectedOptions[0]) els.pack.selectedOptions[0].selected = true;
+
+        const hasLive2d = (state.packs || []).some(p => p.engine === 'live2d');
+        els.modelRow.classList.toggle('dpet-hidden', !hasLive2d);
+        els.modelDir.textContent = state.modelDir || t('未绑定', 'not bound');
+        els.modelDir.title = state.modelDir || '';
 
         els.walk.checked = !!prefs.autoWalk;
         els.bubble.checked = !!prefs.bubbleOn;
@@ -172,8 +186,10 @@
 
         els.voiceOpts.style.display = prefs.voiceOn ? 'flex' : 'none';
         els.voiceEngine.value = prefs.voiceEngine || 'edge-tts';
-        els.edgeOpts.style.display = (prefs.voiceEngine === 'system') ? 'none' : 'flex';
-        els.voicePreview.style.display = (prefs.voiceEngine === 'system') ? 'none' : 'inline-flex';
+        const isSystem = (prefs.voiceEngine === 'system');
+        els.edgeOpts.style.display = isSystem ? 'none' : 'flex';
+        if (els.systemHint) els.systemHint.style.display = isSystem ? 'block' : 'none';
+        els.voicePreview.style.display = 'inline-flex';
 
         if (state.voices && state.voices.length) {
           const vOpts = state.voices.map(v => {
@@ -212,20 +228,80 @@
       });
       els.size.addEventListener('input', () => { els.sizeVal.textContent = `${els.size.value}px`; });
       els.size.addEventListener('change', () => { call('setPrefs', { size: Number(els.size.value) }); });
-      els.pack.addEventListener('change', () => { call('setPrefs', { pack: els.pack.value }); });
+      els.pack.addEventListener('change', async () => {
+        const res = await call('setPrefs', { pack: els.pack.value });
+        const d = res && res.ok ? res.data : null;
+        if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
+      });
+      els.model.addEventListener('click', async () => {
+        const pick = await call('chooseModelDir');
+        const dir = pick && pick.ok && pick.data && pick.data.dir;
+        if (!dir) return;
+        const res = await call('setPrefs', { modelDir: dir });
+        const d = res && res.ok ? res.data : null;
+        if (d && d.packError && els.quipResult) els.quipResult.textContent = `⚠ ${d.packError}`;
+        const st = await call('getState');
+        if (st && st.ok) { state = st.data; render(); }
+      });
       els.walk.addEventListener('change', () => { call('setPrefs', { autoWalk: els.walk.checked }); });
       els.bubble.addEventListener('change', () => { call('setPrefs', { bubbleOn: els.bubble.checked }); });
       let previewAudio = null;
+      let previewTimer = null;
+      let previewState = 'idle'; // 'idle' | 'loading' | 'playing' | 'failed'
+
+      function stopPreview() {
+        clearTimeout(previewTimer);
+        previewTimer = null;
+        if (previewAudio) {
+          try { previewAudio.pause(); previewAudio.currentTime = 0; } catch { /* ignore */ }
+          previewAudio = null;
+        }
+        if ('speechSynthesis' in window) {
+          try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+        }
+      }
+
+      function setPreviewState(st, detail) {
+        previewState = st;
+        if (st === 'idle') {
+          els.voicePreview.textContent = t('试听声音', 'Preview voice');
+          els.voicePreview.disabled = false;
+        } else if (st === 'loading') {
+          els.voicePreview.textContent = t('正在生成…', 'Generating…');
+          els.voicePreview.disabled = false;
+          if (detail) els.previewStatus.textContent = detail;
+        } else if (st === 'playing') {
+          els.voicePreview.textContent = t('停止试听', 'Stop preview');
+          els.voicePreview.disabled = false;
+          if (detail) els.previewStatus.textContent = detail;
+        } else if (st === 'failed') {
+          els.voicePreview.textContent = t('重试试听', 'Retry preview');
+          els.voicePreview.disabled = false;
+          if (detail) els.previewStatus.textContent = detail;
+        }
+      }
+
       els.voice.addEventListener('change', () => {
+        stopPreview();
+        setPreviewState('idle');
+        els.previewStatus.textContent = '';
         call('setPrefs', { voiceOn: els.voice.checked });
         els.voiceOpts.style.display = els.voice.checked ? 'flex' : 'none';
       });
       els.voiceEngine.addEventListener('change', () => {
+        stopPreview();
+        setPreviewState('idle');
+        els.previewStatus.textContent = '';
         call('setPrefs', { voiceEngine: els.voiceEngine.value });
-        els.edgeOpts.style.display = (els.voiceEngine.value === 'system') ? 'none' : 'flex';
-        els.voicePreview.style.display = (els.voiceEngine.value === 'system') ? 'none' : 'inline-flex';
+        const isSystem = (els.voiceEngine.value === 'system');
+        els.edgeOpts.style.display = isSystem ? 'none' : 'flex';
+        if (els.systemHint) els.systemHint.style.display = isSystem ? 'block' : 'none';
+        els.voicePreview.style.display = 'inline-flex';
       });
       els.voiceSelect.addEventListener('change', () => {
+        stopPreview();
+        setPreviewState('idle');
+        els.previewStatus.textContent = '';
         call('setPrefs', { voice: els.voiceSelect.value });
       });
       els.voiceRate.addEventListener('input', () => {
@@ -242,33 +318,107 @@
         call('setPrefs', { voicePitch: Number(els.voicePitch.value) });
       });
       els.voicePreview.addEventListener('click', async () => {
-        if (previewAudio) {
-          try { previewAudio.pause(); } catch { /* ignore */ }
-          previewAudio = null;
+        if (previewState === 'playing') {
+          stopPreview();
+          setPreviewState('idle');
+          els.previewStatus.textContent = '';
+          return;
         }
-        els.previewStatus.textContent = t('正在合成…', 'Synthesizing…');
-        const res = await call('previewVoice', {
-          voice: els.voiceSelect.value,
-          rate: Number(els.voiceRate.value),
-          pitch: Number(els.voicePitch.value),
-          lang: window.I18N && window.I18N.lang,
-        });
-        const d = res && res.ok ? res.data : null;
-        if (d && d.ok && d.audioUrl) {
-          els.previewStatus.textContent = t('正在播放…', 'Playing…');
+
+        stopPreview();
+        const engine = els.voiceEngine.value;
+
+        // 系统本地语音试听
+        if (engine === 'system') {
+          if (!('speechSynthesis' in window)) {
+            setPreviewState('failed', t('⚠ 当前环境不支持系统本地语音，点击重试', '⚠ Local speech unsupported, click to retry'));
+            return;
+          }
+          const isEn = (window.I18N && window.I18N.lang === 'en');
+          const sampleText = isEn
+            ? 'Hello! This is a preview of the system local voice.'
+            : '你好呀，我是小轨桌宠，这是系统本地语音试听效果。';
+          const u = new SpeechSynthesisUtterance(sampleText);
+          u.lang = isEn ? 'en-US' : 'zh-CN';
+          const rateVal = Number(els.voiceRate.value) || 0;
+          u.rate = Math.max(0.5, Math.min(2.0, 1.0 + (rateVal / 100)));
+
+          setPreviewState('playing', t('正在播放系统语音…', 'Playing system voice…'));
+
+          u.onstart = () => {
+            clearTimeout(previewTimer);
+            setPreviewState('playing', t('正在播放系统语音…', 'Playing system voice…'));
+          };
+          u.onend = () => {
+            clearTimeout(previewTimer);
+            setPreviewState('idle');
+            els.previewStatus.textContent = t('✓ 试听完成', '✓ Finished');
+            setTimeout(() => { if (els.previewStatus.textContent.includes('✓')) els.previewStatus.textContent = ''; }, 2500);
+          };
+          u.onerror = () => {
+            clearTimeout(previewTimer);
+            setPreviewState('failed', t('⚠ 播放失败，点击重试', '⚠ Play failed, click to retry'));
+          };
+
+          previewTimer = setTimeout(() => {
+            if (previewState === 'playing') {
+              stopPreview();
+              setPreviewState('failed', t('⚠ 试听超时，点击重试', '⚠ Timeout, click to retry'));
+            }
+          }, 8000);
+
+          try {
+            window.speechSynthesis.speak(u);
+          } catch {
+            clearTimeout(previewTimer);
+            setPreviewState('failed', t('⚠ 启动系统语音失败，点击重试', '⚠ Failed to start voice, click to retry'));
+          }
+          return;
+        }
+
+        // Edge 神经网络语音试听
+        setPreviewState('loading', t('正在合成…', 'Synthesizing…'));
+        previewTimer = setTimeout(() => {
+          if (previewState === 'loading') {
+            stopPreview();
+            setPreviewState('failed', t('⚠ 合成超时，点击重试', '⚠ Synthesis timeout, click to retry'));
+          }
+        }, 8000);
+
+        try {
+          const res = await call('previewVoice', {
+            voice: els.voiceSelect.value,
+            rate: Number(els.voiceRate.value),
+            pitch: Number(els.voicePitch.value),
+            lang: window.I18N && window.I18N.lang,
+          });
+          clearTimeout(previewTimer);
+          const d = res && res.ok ? res.data : null;
+          if (!d || !d.ok || !d.audioUrl) {
+            const err = (d && d.error) || (res && res.error) || '';
+            setPreviewState('failed', t(`⚠ 失败: ${err || '合成错误'}，点击重试`, `⚠ Failed: ${err || 'error'}, click to retry`));
+            return;
+          }
+
+          setPreviewState('playing', t('正在播放…', 'Playing…'));
           previewAudio = new Audio(d.audioUrl);
           previewAudio.onended = () => {
+            previewAudio = null;
+            setPreviewState('idle');
             els.previewStatus.textContent = t('✓ 试听完成', '✓ Finished');
             setTimeout(() => { if (els.previewStatus.textContent.includes('✓')) els.previewStatus.textContent = ''; }, 2500);
           };
           previewAudio.onerror = () => {
-            els.previewStatus.textContent = t('⚠ 播放失败', '⚠ Play failed');
+            previewAudio = null;
+            setPreviewState('failed', t('⚠ 播放失败，点击重试', '⚠ Play failed, click to retry'));
           };
           previewAudio.play().catch(() => {
-            els.previewStatus.textContent = t('⚠ 播放失败', '⚠ Play failed');
+            previewAudio = null;
+            setPreviewState('failed', t('⚠ 播放失败，点击重试', '⚠ Play failed, click to retry'));
           });
-        } else {
-          els.previewStatus.textContent = t(`⚠ 失败: ${d && d.error || ''}`, `⚠ Failed: ${d && d.error || ''}`);
+        } catch (err) {
+          clearTimeout(previewTimer);
+          setPreviewState('failed', t(`⚠ 异常: ${err.message || ''}，点击重试`, `⚠ Error: ${err.message || ''}, click to retry`));
         }
       });
       els.wf.addEventListener('change', () => { call('setPrefs', { wfOn: els.wf.checked }); });
@@ -307,7 +457,7 @@
 
       return {
         unmount() {
-          if (previewAudio) { try { previewAudio.pause(); } catch { /* ignore */ } previewAudio = null; }
+          stopPreview();
           offEvent && offEvent();
         },
       };

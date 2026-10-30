@@ -2,8 +2,10 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <!-- 'unsafe-eval': Live2D Cubism Core builds WASM wrappers with new Function.
+       The page only ever loads local plugin:// vendor code; no remote sources. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'" />
+        content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'" />
   <title>desktop-pet</title>
   <link rel="stylesheet" href="pet.css" />
 </head>
@@ -15,10 +17,11 @@
     <div id="bubble"></div>
   </div>
   <div id="stage">
-    <!-- A/B double buffer: the incoming animation loads and starts in the
-         back element, then the buffers swap — transitions never flash. -->
-    <video id="va" muted playsinline></video>
-    <video id="vb" muted playsinline></video>
+    <!-- A/B double buffer (webm engine): the incoming animation loads and
+         starts in the back element, then the buffers swap — transitions never
+         flash. The live2d engine appends a canvas.pet-body here instead. -->
+    <video id="va" class="pet-body" muted playsinline></video>
+    <video id="vb" class="pet-body back" muted playsinline></video>
   </div>
   <div id="sling"></div>
   <script src="pet.js"></script>

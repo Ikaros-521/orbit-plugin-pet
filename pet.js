@@ -1,124 +1,48 @@
-/* desktop-pet sprite renderer.
-   Runs inside the transparent window. Responsibilities:
-   - A/B video double-buffer playback with load-failure release (the pending
-     switch must never hang: a stuck pending silently eats every later click,
-     a lesson adopted from dsh-pet's playback state machine)
-   - weighted idle animation chain + one-shot animations from the menu
-   - random walk along the floor of the current display (window moves, anim
-     switches to the pack's walk clip, facing flips by direction)
-   - drag with pointer capture; release computes a toss velocity and runs
-     gravity/bounce physics until the pet settles
-   - click-through: the window is mouse-transparent except over the pet body,
-     toggled via setIgnoreMouseEvents(forward) enter/leave events
+/* desktop-pet sprite renderer — engine-agnostic skeleton.
+   The body itself is rendered by a pluggable motion module: motion-webm.js
+   (A/B double-buffered VP9-alpha video, the default) or motion-live2d.js
+   (pixi + Cubism, for user Live2D models loaded from an external dir).
+   Everything else here never learns which engine runs: drag physics, wander,
+   slingshot, spring home, bubbles/voice, todo badge, click-through hit
+   testing, lock, playback receipts, status heartbeat.
 
-   Position truth: the main process owns window bounds; this side mirrors
-   them (window.screenX/Y resync on every drag move, so main-side clamping
-   can't accumulate drift). */
+   Position truth: the renderer owns a shadow position while moving
+   (window.screenX lags pending IPC and rubber-bands if integrated from);
+   raw pointermove coalesces into one bounds request per animation frame. */
 (function () {
   'use strict';
 
   const stage = document.getElementById('stage');
-  const vids = [document.getElementById('va'), document.getElementById('vb')];
-  let front = 0;
 
-  let cfg = null;        // pack manifest (anims etc.)
-  let assetBase = '';    // plugin://<id>/pets/<pack>/
+  let cfg = null;        // pack manifest
+  let assetBase = '';    // webm: plugin://<id>/pets/<pack>/ ; live2d: @models/
   let prefs = { size: 240, autoWalk: true };
   let displays = [];
+  let motion = null;     // engine instance (motion-webm / motion-live2d)
 
-  /* --- playback ---------------------------------------------------------- */
+  const loadScript = src => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = res;
+    s.onerror = () => rej(new Error('script load failed: ' + src));
+    document.head.appendChild(s);
+  });
 
-  let current = null;    // anim name currently up front
-  let gen = 0;           // switch generation: stale async results die silently
-  let loadTimer = 0;
-  let onceDone = null;   // callback after a one-shot finishes
-  let idleTimer = 0;     // pacing between idle anims
+  /* --- idle / walk self-scheduling ------------------------------------------- */
+
+  let idleTimer = 0;
   let walkTimer = 0;
-
-  const frontEl = () => vids[front];
-  const backEl = () => vids[1 - front];
-
-  function weightedPick(pool, exclude) {
-    const cands = pool.filter(a => a.name !== exclude);
-    if (!cands.length) return pool[0] || null;
-    let sum = 0;
-    for (const a of cands) sum += Math.max(1, a.weight || 1);
-    let r = Math.random() * sum;
-    for (const a of cands) { r -= Math.max(1, a.weight || 1); if (r <= 0) return a; }
-    return cands[cands.length - 1];
-  }
-
-  /* Swap in `name`. Loads in the back buffer, swaps when it has frames, and
-     always releases the pending slot on failure/timeout so later switches
-     still work. onEnd fires when a one-shot finishes (or fails).
-     playbackId (optional) turns this switch into a reported receipt:
-     pending -> playing -> done | failed, which the backend hands to callers
-     that await a workflow node or external integration. */
-  const reportPlayback = (id, status) => { if (id) window.pet.reportPlayback(id, status); };
-
-  function switchTo(name, once, onEnd, playbackId) {
-    const a = cfg.anims.find(x => x.name === name);
-    if (!a) { reportPlayback(playbackId, 'failed'); if (onEnd) onEnd(); return; }
-    if (name === current) { reportPlayback(playbackId, 'playing'); if (onEnd) onEnd(); return; } // 防重：目标已在播
-    const myGen = ++gen;
-    clearTimeout(loadTimer);
-    onceDone = onEnd || null;
-    const el = backEl();
-    const src = assetBase + encodeURIComponent(a.file);
-    const giveUp = why => {
-      if (myGen !== gen) return;
-      clearTimeout(loadTimer);
-      reportPlayback(playbackId, 'failed');
-      if (onceDone) { const cb = onceDone; onceDone = null; cb(); }
-      console.warn('[desktop-pet] anim load failed:', name, why);
-    };
-    loadTimer = setTimeout(() => giveUp('10s timeout'), 10000);
-    el.onerror = () => giveUp('video error');
-    const ready = () => {
-      if (myGen !== gen) return;
-      clearTimeout(loadTimer);
-      el.onerror = null;
-      front = 1 - front;
-      frontEl().classList.remove('back');
-      backEl().classList.add('back');
-      backEl().pause();
-      current = name;
-      reportPlayback(playbackId, 'playing');
-      if (a.once || once) {
-        el.onended = () => { el.onended = null; reportPlayback(playbackId, 'done'); if (myGen === gen && onceDone) { const cb = onceDone; onceDone = null; cb(); } };
-      } else {
-        el.onended = null;
-      }
-    };
-    el.loop = !(a.once || once);
-    el.src = src;
-    el.currentTime = 0;
-    el.onloadeddata = ready;
-    el.play().catch(() => giveUp('autoplay blocked'));
-  }
-
-  function idle() {
-    if (!cfg) return;
-    const pool = cfg.anims.filter(a => (a.role === 'idle' || !a.role) && (a.weight || 0) > 0);
-    if (!pool.length) return;
-    const pick = weightedPick(pool, current);
-    if (pick) switchTo(pick.name, false, null);
-  }
 
   function scheduleIdle() {
     clearTimeout(idleTimer);
-    if (prefs.locked) return; // takeover owns the stage; onLock(false) reschedules
-    idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking && !slingMode && !prefs.locked) idle(); }, 6000 + Math.random() * 8000);
+    if (prefs.locked || !motion) return; // takeover owns the stage; onLock(false) reschedules
+    idleTimer = setTimeout(() => {
+      if (!dragging && !airborne && !walking && !slingMode && !prefs.locked) motion.idle();
+    }, 6000 + Math.random() * 8000);
   }
 
   /* --- window position ------------------------------------------------------ */
 
-  /* The renderer owns a shadow position while the pet is under animation:
-     window.screenX lags pending setBounds round-trips, and integrating
-     movement from a stale read rubber-bands the window. Raw pointermove can
-     fire 125-1000x/s — faster than DWM can move a layered window — so drag
-     requests coalesce into one IPC per frame; rAF-driven walks/tosses send
-     directly (already frame-aligned). */
   let shadowX = 0, shadowY = 0;
   let moveRaf = 0, movePending = false;
 
@@ -160,7 +84,6 @@
 
   function setFacing(dirRight) {
     const facesRight = (cfg.defaultFacing || 'right') === 'right';
-    // videos face their authored direction; flip when walking against it
     stage.classList.toggle('flip', dirRight !== facesRight);
   }
 
@@ -170,10 +93,8 @@
   }
 
   function walkTo(targetX) {
-    const walkAnim = cfg.anims.find(a => a.role === 'walk');
-    if (!walkAnim) return;
     walking = true;
-    switchTo(walkAnim.name, false, null);
+    motion.play('walk'); // no walk mapping just means the body stays idle while gliding
     const speed = Math.max(60, prefs.size * 0.9); // px/s
     let last = performance.now();
     const step = now => {
@@ -185,7 +106,6 @@
       setFacing(dir > 0);
       const next = x + dir * speed * dt;
       const arrived = dir > 0 ? next >= targetX : next <= targetX;
-      // stay glued to the floor while walking
       moveNow(arrived ? targetX : next, floorY());
       if (arrived) { endWalk(); return; }
       walkRaf = requestAnimationFrame(step);
@@ -196,7 +116,7 @@
   function endWalk() {
     walking = false;
     cancelAnimationFrame(walkRaf);
-    idle();
+    motion.idle();
     scheduleIdle();
     scheduleWalk();
   }
@@ -220,9 +140,9 @@
 
   let airborne = false;
   let physRaf = 0;
-  const G = 3000;          // px/s²
-  const REST = 0.42;       // floor bounce retention
-  const WALL = 0.5;        // side bounce retention
+  const G = 3000;
+  const REST = 0.42;
+  const WALL = 0.5;
 
   function toss(vx, vy) {
     airborne = true;
@@ -257,20 +177,18 @@
     airborne = false;
     cancelAnimationFrame(physRaf);
     moveNow(shadowX, floorY());
-    idle();
+    if (motion) motion.idle();
     scheduleIdle();
     scheduleWalk();
   }
 
   /* --- spring home -------------------------------------------------------------- */
 
-  /* Damped-spring glide to a window-space target (menu / reset position) — a
-     teleport reads as a glitch for a living thing. */
   let springRaf = 0;
   function springTo(tx, ty) {
     if (dragging || airborne || !cfg) return;
     stopLoops();
-    const K = 16, D = 9; // stiffness / damping (per second)
+    const K = 16, D = 9;
     let vx = 0, vy = 0, last = performance.now();
     const step = now => {
       const dt = Math.min(0.033, (now - last) / 1000);
@@ -290,41 +208,85 @@
     springRaf = requestAnimationFrame(step);
   }
 
-  /* --- drag & click -------------------------------------------------------- */
+  /* --- drag, click, slingshot -------------------------------------------------- */
 
   let dragging = false;
   let downAt = 0;
   let downSX = 0, downSY = 0, downWX = 0, downWY = 0;
   let moved = 0;
-  let samples = []; // {t, sx, sy} — velocity window over the last ~120ms
+  let samples = [];
+
+  const slingEl = document.getElementById('sling');
+  let slingMode = false;
+  let slingExit = 0;
+
+  const slingAnchor = () => ({
+    x: window.innerWidth / 2,
+    y: marginH + (window.innerHeight - marginH) * 0.55,
+  });
+
+  function hideSlingBand() { slingEl.style.display = 'none'; }
+
+  function leaveSling() {
+    slingMode = false;
+    clearTimeout(slingExit);
+    document.body.classList.remove('slingready');
+    hideSlingBand();
+  }
+
+  function enterSling() {
+    if (dragging || airborne || walking) return;
+    slingMode = true;
+    document.body.classList.add('slingready');
+    clearTimeout(slingExit);
+    slingExit = setTimeout(leaveSling, 4000);
+    showBubble('拉我呀～');
+  }
+
+  function drawSlingBand(cx, cy) {
+    const a = slingAnchor();
+    const dx = cx - a.x, dy = cy - a.y;
+    const len = Math.min(300, Math.hypot(dx, dy));
+    const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+    slingEl.style.display = 'block';
+    slingEl.style.left = a.x + 'px';
+    slingEl.style.top = a.y + 'px';
+    slingEl.style.width = len + 'px';
+    slingEl.style.transform = `rotate(${ang}deg)`;
+  }
+
+  function spin() {
+    stage.classList.remove('spin');
+    void stage.offsetWidth;
+    stage.classList.add('spin');
+    setTimeout(() => stage.classList.remove('spin'), 700);
+  }
 
   stage.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     dragging = true;
     stage.classList.add('dragging');
+    window.pet.touch();
     stopVoice();
-    window.pet.touch(); // a user grab revokes any external takeover (main side)
     stopLoops();
-    if (!movePending) { shadowX = window.screenX; shadowY = window.screenY; } // idle = OS is the authority
+    if (!movePending) { shadowX = window.screenX; shadowY = window.screenY; }
     downAt = performance.now();
     downSX = e.screenX; downSY = e.screenY;
-    downWX = shadowX; downWY = shadowY; // anchor from shadow: window.screenX may lag a just-settled toss
+    downWX = shadowX; downWY = shadowY;
     moved = 0;
     samples = [{ t: downAt, sx: downSX, sy: downSY }];
-    try { stage.setPointerCapture(e.pointerId); } catch { /* untrusted/synthetic event — listeners on stage suffice */ }
+    try { stage.setPointerCapture(e.pointerId); } catch { /* synthetic events — stage listeners suffice */ }
   });
 
   stage.addEventListener('pointermove', e => {
     if (!dragging) return;
     samples.push({ t: performance.now(), sx: e.screenX, sy: e.screenY });
     while (samples.length > 2 && performance.now() - samples[0].t > 120) samples.shift();
-    if (slingMode) { // stretch the band, body holds its ground
+    if (slingMode) {
       moved = Math.max(moved, Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY));
       drawSlingBand(e.clientX, e.clientY);
       return;
     }
-    // absolute positioning from the press anchor; requestMove coalesces the
-    // raw (up to 1000Hz) event stream into one bounds IPC per frame
     const nx = downWX + (e.screenX - downSX);
     const ny = downWY + (e.screenY - downSY);
     moved = Math.max(moved, Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY));
@@ -340,23 +302,21 @@
       const a = slingAnchor();
       const px = e.clientX - a.x, py = e.clientY - a.y;
       leaveSling();
-      if (Math.hypot(px, py) > 40) { spin(); toss(-px * 5, -py * 5); } // fire opposite the pull
+      if (Math.hypot(px, py) > 40) { spin(); toss(-px * 5, -py * 5); }
       else { settle(); }
       return;
     }
     const dt = performance.now() - downAt;
     if (moved < 6 && dt < 400) {
-      // click: Q弹 + one-shot reaction anim, then back to idle
+      // click: Q弹 + the pack's click reaction, then back to idle
       stage.classList.remove('squash');
-      void stage.offsetWidth; // restart the keyframe animation
+      void stage.offsetWidth;
       stage.classList.add('squash');
-      const clickAnim = cfg.anims.find(a => a.role === 'click');
-      if (clickAnim) switchTo(clickAnim.name, true, () => { idle(); scheduleIdle(); });
+      if (motion.has('click')) motion.play('click', true).then(st => { if (st !== 'stale') { motion.idle(); scheduleIdle(); } });
       else scheduleIdle();
       scheduleWalk();
       return;
     }
-    // toss: velocity from the freshest sample window (px/ms → px/s)
     const first = samples[0];
     const last = samples[samples.length - 1];
     const ms = Math.max(1, last.t - first.t);
@@ -367,6 +327,7 @@
   };
   stage.addEventListener('pointerup', endDrag);
   stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('dblclick', enterSling);
 
   stage.addEventListener('contextmenu', e => {
     e.preventDefault();
@@ -383,7 +344,8 @@
     clearTimeout(idleTimer);
   }
 
-  /* --- bubble & voice -------------------------------------------------------- */
+  /* --- bubble & voice (EdgeTTS audioUrl when the backend supplies one,
+       system speechSynthesis as fallback) -------------------------------------- */
 
   let marginH = 0;
   const bubble = document.getElementById('bubble');
@@ -415,7 +377,8 @@
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = prefs.lang === 'en' ? 'en-US' : 'zh-CN';
-      u.rate = 0.98;
+      const rateOffset = Number(prefs.voiceRate) || 0;
+      u.rate = Math.max(0.5, Math.min(2.0, 1.0 + (rateOffset / 100)));
       window.speechSynthesis.speak(u);
     } catch { /* no voice device: bubble only */ }
   };
@@ -456,7 +419,7 @@
   }
 
   function showBubble(text, audioUrl) {
-    if (!prefs.bubbleOn || !text || dragging) return; // the user is busy dragging — drop the chatter
+    if (!prefs.bubbleOn || !text || dragging) return;
     stopVoice();
     bubble.textContent = text;
     bubble.classList.add('on');
@@ -490,66 +453,8 @@
   });
   tasksEl.addEventListener('click', () => window.pet.tasksClick());
 
-  /* --- slingshot -------------------------------------------------------------- */
-
-  /* Double-click crouches (slingready); the NEXT drag does not move the body —
-     it stretches the band. Releasing fires the pet opposite to the pull with
-     a spin. Small pulls cancel politely. */
-  const slingEl = document.getElementById('sling');
-  let slingMode = false;
-  let slingExit = 0;
-
-  const slingAnchor = () => ({
-    x: window.innerWidth / 2,
-    y: marginH + (window.innerHeight - marginH) * 0.55,
-  });
-
-  function hideSlingBand() { slingEl.style.display = 'none'; }
-
-  function leaveSling() {
-    slingMode = false;
-    clearTimeout(slingExit);
-    document.body.classList.remove('slingready');
-    hideSlingBand();
-  }
-
-  function enterSling() {
-    if (dragging || airborne || walking) return;
-    slingMode = true;
-    document.body.classList.add('slingready');
-    clearTimeout(slingExit);
-    slingExit = setTimeout(leaveSling, 4000); // stand back up if nobody pulls
-    showBubble('拉我呀～');
-  }
-
-  function drawSlingBand(cx, cy) {
-    const a = slingAnchor();
-    const dx = cx - a.x, dy = cy - a.y;
-    const len = Math.min(300, Math.hypot(dx, dy));
-    const ang = Math.atan2(dy, dx) * 180 / Math.PI;
-    slingEl.style.display = 'block';
-    slingEl.style.left = a.x + 'px';
-    slingEl.style.top = a.y + 'px';
-    slingEl.style.width = len + 'px';
-    slingEl.style.transform = `rotate(${ang}deg)`;
-  }
-
-  function spin() {
-    stage.classList.remove('spin');
-    void stage.offsetWidth;
-    stage.classList.add('spin');
-    setTimeout(() => stage.classList.remove('spin'), 700);
-  }
-
-  stage.addEventListener('dblclick', enterSling);
-
   /* --- click-through -------------------------------------------------------- */
 
-  /* The window stays transparent to the mouse except over the pet body (the
-     video area below the bubble margin) or a visible bubble. With forward:true
-     the page still receives mousemove while transparent, so this one handler
-     owns both directions of the toggle — no reliance on enter/leave edges,
-     and the empty bubble strip never swallows clicks. */
   let ignoring = null;
   const inRect = (el, x, y) => {
     const r = el.getBoundingClientRect();
@@ -561,7 +466,7 @@
     return y >= marginH;
   }
   window.addEventListener('mousemove', e => {
-    if (dragging) return; // pointer capture owns the mouse during drags
+    if (dragging) return;
     const wantIgnore = !overBody(e.clientX, e.clientY);
     if (wantIgnore !== ignoring) {
       ignoring = wantIgnore;
@@ -569,21 +474,15 @@
     }
   });
 
-  /* --- status heartbeat (tests / future companions read this via the panel) - */
+  /* --- status heartbeat -------------------------------------------------------- */
 
   setInterval(() => {
-    const el = frontEl();
-    // at rest the main process is the authority (it may have clamped us on a
-    // display change) — fold its position back into the shadow so the next
-    // drag/toss starts from where the window really is
     if (!dragging && !walking && !airborne && !movePending) {
       shadowX = window.screenX; shadowY = window.screenY;
     }
+    const ms = motion ? motion.state() : { anim: null, playing: false, t: 0, ready: 0 };
     window.pet.status({
-      anim: current,
-      playing: el && !el.paused && !el.ended,
-      t: el ? Math.round(el.currentTime * 100) / 100 : 0,
-      ready: el ? el.readyState : 0,
+      anim: ms.anim, playing: ms.playing, t: ms.t, ready: ms.ready,
       x: Math.round(shadowX), y: Math.round(shadowY),
       walking, airborne, bubble: bubbleVisible,
     });
@@ -591,16 +490,39 @@
 
   /* --- boot ------------------------------------------------------------------ */
 
-  function start() {
-    current = null;
-    shadowX = window.screenX; shadowY = window.screenY;
-    const first = cfg.anims.find(a => (a.role === 'idle' || !a.role)) || cfg.anims[0];
-    switchTo(first.name, false, null);
-    scheduleIdle();
-    scheduleWalk();
-    window.pet.setIgnore(true); ignoring = true; // transparent until the cursor meets the pet
+  async function bootMotion(init) {
+    const engine = (init.pack && init.pack.engine === 'live2d') ? 'live2d' : 'webm';
+    const pb = init.pluginBase || '';
+    const sb = init.scriptsBase || (pb ? `${pb}/vendor` : 'vendor');
+    await loadScript(pb ? `${pb}/motion-${engine}.js` : `motion-${engine}.js`);
+    if (engine === 'live2d') {
+      await loadScript(`${sb}/live2dcubismcore.min.js`);
+      await loadScript(`${sb}/pixi.min.js`);
+      await loadScript(`${sb}/l2d-display-cubism4.min.js`);
+    }
+    const m = window.PetMotion[engine]({
+      cfg: init.pack,
+      assetBase: init.assetBase,
+      modelUrl: init.modelUrl || null,
+      getPrefs: () => prefs,
+    });
+    const up = await m.ready;
+    if (!up) {
+      // dead engine must not kill the window: keep the bubble telling the story
+      showBubble('模型加载失败，检查模型目录设置');
+    }
+    return m;
   }
 
+  function start() {
+    shadowX = window.screenX; shadowY = window.screenY;
+    if (motion) motion.idle();
+    scheduleIdle();
+    scheduleWalk();
+    window.pet.setIgnore(true); ignoring = true;
+  }
+
+  let booting = null;
   window.pet.onInit(init => {
     cfg = init.pack;
     assetBase = init.assetBase;
@@ -610,7 +532,13 @@
     if (cfg.bubbleAnchor && Number.isFinite(cfg.bubbleAnchor.x)) {
       bubble.style.left = Math.round(Math.min(1, Math.max(0, cfg.bubbleAnchor.x)) * 100) + '%';
     }
-    start();
+    booting = bootMotion(init).then(m => {
+      motion = m;
+      start();
+    }).catch(err => {
+      console.warn('[desktop-pet] motion engine boot failed:', err.message);
+      showBubble('我起不来了…（引擎加载失败）');
+    });
   });
   window.pet.onPrefs(p => {
     const prevMargin = prefs.margin;
@@ -621,11 +549,15 @@
   });
   window.pet.onBubble(({ text, audioUrl } = {}) => showBubble(text, audioUrl));
   window.pet.onPlay(({ anim, once, playbackId }) => {
+    if (!motion) return;
     stopLoops();
-    switchTo(anim, once, () => { idle(); scheduleIdle(); scheduleWalk(); }, playbackId || null);
-    // a loop animation dispatched without a finish event (e.g. a workflow run
-    // that never reports back) must not strand the pet — self-heal to idle
-    if (!once) scheduleIdle();
+    const p = once === undefined ? motion.play(anim) : motion.play(anim, !!once);
+    Promise.resolve(p).then(st => {
+      if (st === 'stale') return; // a newer switch owns the stage now
+      if (playbackId) window.pet.reportPlayback(playbackId, st === 'failed' ? 'failed' : (st === 'playing' ? 'playing' : 'done'));
+      if (st === 'done' || st === 'failed') { motion.idle(); scheduleIdle(); scheduleWalk(); }
+    });
+    if (!once) scheduleIdle(); // self-heal: a run that never finishes must not strand the pet
   });
   window.pet.onLock(({ locked } = {}) => {
     prefs.locked = !!locked;

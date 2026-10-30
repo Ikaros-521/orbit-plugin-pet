@@ -24,6 +24,12 @@
   padding: 12px 16px; display: flex; flex-direction: column; gap: 10px;
 }
 .dpet-row { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink); }
+.dpet-hidden { display: none !important; } /* the host has no generic .hidden — define it */
+.dpet-modelrow code {
+  flex: 1 1 auto; min-width: 0; font: 11px/1.6 var(--font-mono, monospace); color: var(--ink-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dpet-modelrow .btn { flex: 0 0 auto; }
 .dpet-row-label { flex: 0 0 auto; color: var(--ink-dim); }
 .dpet-size { flex: 1 1 auto; accent-color: var(--amber, #e8a13c); }
 .dpet-size-val { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--ink); min-width: 48px; text-align: right; }
@@ -42,6 +48,12 @@
   border-left: 2px solid var(--amber, #e8a13c);
   background: var(--surface-subtle, rgba(255, 255, 255, 0.03));
   border-radius: 0 var(--r-sm, 6px) var(--r-sm, 6px) 0;
+}
+.dpet-system-hint {
+  font-size: 11px;
+  color: var(--ink-faint);
+  line-height: 1.4;
+  padding: 2px 0 2px 2px;
 }
 .dpet-edge-opts { display: flex; flex-direction: column; gap: 10px; }
 .dpet-voice-engine, .dpet-voice-select { flex: 1 1 auto; min-width: 0; width: auto; font-family: inherit; }

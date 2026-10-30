@@ -40,14 +40,19 @@ module.exports = {
       wfOn: true,          // react to workflow runs with state animations
       tasksOn: true,       // unchecked-todo badge mirrored from memo
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
+      modelDir: null,      // external Live2D model root (never inside the repo)
       x: null,
       y: null,
       ...ctx.data.get(),
     };
     const savePrefs = () => ctx.data.set({ ...prefs });
 
-    /* A pack is pets/<id>/pet.json + its webm files. Entries whose files are
-       missing are dropped here, not at play time. */
+    /* Packs live in pets/<id>/pet.json. Two engines:
+       - webm (default): every anim file must exist, empty pool = skip
+       - live2d: the model itself lives OUTSIDE this repo, in a user-bound
+         directory (prefs.modelDir, served as plugin://…/@models/). A live2d
+         pack still lists itself without a bound dir — flagged needsModel,
+         activated only once a directory is chosen in the panel. */
     function scanPacks() {
       const root = path.join(ctx.root, 'pets');
       const packs = [];
@@ -58,14 +63,24 @@ module.exports = {
         let cfg;
         try { cfg = JSON.parse(fs.readFileSync(path.join(root, ent.name, 'pet.json'), 'utf8')); }
         catch { console.warn(`[desktop-pet] pets/${ent.name}: pet.json missing/invalid, skipped`); continue; }
-        const anims = (Array.isArray(cfg.anims) ? cfg.anims : []).filter(a =>
-          a && typeof a.name === 'string' && typeof a.file === 'string'
-          && fs.existsSync(path.join(root, ent.name, a.file)));
-        if (!anims.length) { console.warn(`[desktop-pet] pets/${ent.name}: no playable anims, skipped`); continue; }
+        const engine = cfg.engine === 'live2d' ? 'live2d' : 'webm';
+        let anims = [];
+        let needsModel = false;
+        if (engine === 'live2d') {
+          needsModel = !(prefs.modelDir && typeof cfg.model === 'string'
+            && fs.existsSync(path.join(prefs.modelDir, cfg.model)));
+        } else {
+          anims = (Array.isArray(cfg.anims) ? cfg.anims : []).filter(a =>
+            a && typeof a.name === 'string' && typeof a.file === 'string'
+            && fs.existsSync(path.join(root, ent.name, a.file)));
+          if (!anims.length) { console.warn(`[desktop-pet] pets/${ent.name}: no playable anims, skipped`); continue; }
+        }
         packs.push({
           id: cfg.id || ent.name,
           dirName: ent.name,
-          cfg: { ...cfg, anims },
+          engine,
+          needsModel,
+          cfg: { ...cfg, engine, anims },
         });
       }
       return packs;
@@ -73,8 +88,20 @@ module.exports = {
 
     let packs = scanPacks();
     const packById = id => packs.find(p => p.id === id || p.dirName === id) || null;
-    let pack = packById(prefs.pack) || packs[0] || null;
+    let pack = packById(prefs.pack) || packs.find(p => !p.needsModel) || packs[0] || null;
+    if (pack && pack.needsModel) {
+      const usable = packs.find(p => !p.needsModel);
+      if (usable) pack = usable; // live2d without a bound dir never steals the stage from a working pack
+    }
     if (!pack) throw new Error('no pet pack found under pets/');
+
+    /* Bind the user model dir (when configured) as the @models asset root. */
+    function bindModelRoot() {
+      if (!prefs.modelDir) return false;
+      try { ctx.addAssetRoot('models', prefs.modelDir); return true; }
+      catch { return false; }
+    }
+    bindModelRoot();
 
     /* --- sprite window ------------------------------------------------------ */
 
@@ -189,9 +216,16 @@ module.exports = {
     };
 
     const stateFor = () => ({
-      pack: { id: pack.id, name: pack.cfg.name || pack.id, version: pack.cfg.version || '0.0.0', author: pack.cfg.author || '', credit: pack.cfg.credit || null, anims: pack.cfg.anims.map(a => a.name) },
-      packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id })),
+      pack: {
+        id: pack.id, name: pack.cfg.name || pack.id, version: pack.cfg.version || '0.0.0',
+        author: pack.cfg.author || '', credit: pack.cfg.credit || null,
+        engine: pack.engine,
+        anims: pack.engine === 'live2d' ? live2dKeys() : pack.cfg.anims.map(a => a.name),
+      },
+      packs: packs.map(p => ({ id: p.id, name: p.cfg.name || p.id, engine: p.engine, needsModel: !!p.needsModel })),
+      modelDir: prefs.modelDir || null,
       prefs: { pack: pack.id, ...prefsPayload() },
+      voices: ttsService.getPresetVoices(),
       visible: !!(petWin && !petWin.isDestroyed() && petWin.isVisible()),
       status: lastStatus,
       // pure read: lazy expiry happens in isLocked() on the interaction paths
@@ -316,6 +350,12 @@ module.exports = {
        and the context menu all derive from this list. */
     const monthNow = () => new Date().getMonth() + 1;
     const activeAnims = () => pack.cfg.anims.filter(a => !Array.isArray(a.season) || a.season.includes(monthNow()));
+    /* semantic-name support across engines: webm matches anim name OR role
+       (click/walk/idle live in roles); live2d matches its pack mapping keys */
+    const live2dKeys = () => Object.keys(pack.cfg.live2d || {}).filter(k => !['fit', 'footY'].includes(k));
+    const supportsAnim = name => pack.engine === 'live2d'
+      ? (name === 'idle' ? !!pack.cfg.live2d : live2dKeys().includes(name))
+      : activeAnims().some(a => a.name === name || a.role === name);
 
     /* --- file drop: the pet as a toolbox entry point -------------------------- */
 
@@ -402,9 +442,15 @@ module.exports = {
       on('ready', e => {
         try {
           e.sender.send(`${P}init`, {
-            pack: { ...pack.cfg, anims: activeAnims() },
+            pack: pack.engine === 'live2d' ? pack.cfg : { ...pack.cfg, anims: activeAnims() },
+            engine: pack.engine,
             packDir: pack.dirName,
-            assetBase: `plugin://${ctx.id}/pets/${pack.dirName}/`,
+            pluginBase: `plugin://${ctx.id}`,
+            assetBase: pack.engine === 'live2d' ? `plugin://${ctx.id}/@models/` : `plugin://${ctx.id}/pets/${pack.dirName}/`,
+            modelUrl: pack.engine === 'live2d' && pack.cfg.model
+              ? `plugin://${ctx.id}/@models/${String(pack.cfg.model).split('/').map(encodeURIComponent).join('/')}`
+              : null,
+            scriptsBase: ctx.url('vendor'),
             prefs: prefsPayload(),
             displays: displays(),
           });
@@ -437,10 +483,15 @@ module.exports = {
         try { petWin.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* raced close */ }
       }),
       on('context-menu', () => {
-        const animItems = activeAnims().filter(a => a.role !== 'walk').map(a => ({
-          label: `▶ ${a.name}`,
-          click: () => send('play', { anim: a.name, once: a.once !== false, playbackId: null }),
-        }));
+        const animItems = pack.engine === 'live2d'
+          ? live2dKeys().filter(k => k !== 'walk').map(name => ({
+              label: `▶ ${name}`,
+              click: () => send('play', { anim: name, playbackId: null }),
+            }))
+          : activeAnims().filter(a => a.role !== 'walk').map(a => ({
+              label: `▶ ${a.name}`,
+              click: () => send('play', { anim: a.name, once: a.once !== false, playbackId: null }),
+            }));
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
         Menu.buildFromTemplate([
           ...animItems,
@@ -509,9 +560,27 @@ module.exports = {
             applyBounds(x, y, width, height);
           }
         }
+        if (typeof args.modelDir === 'string' && args.modelDir.trim()) {
+          const dir = args.modelDir.trim();
+          if (dir === prefs.modelDir) { /* no-op */ }
+          else if (fs.existsSync(dir)) {
+            prefs.modelDir = dir;
+            bindModelRoot();
+            packs = scanPacks();
+            const cur = packById(pack.id);
+            if (cur) pack = cur; // refresh needsModel on the live pack object
+            reload = true;       // engine may change -> fresh handshake
+          } else {
+            return { ok: false, error: '目录不存在：' + dir };
+          }
+        }
+        let packErr = null;
         if (typeof args.pack === 'string') {
           const next = packById(args.pack);
-          if (next && next.id !== pack.id) { pack = next; prefs.pack = pack.id; reload = true; }
+          if (next && next.id !== pack.id) {
+            if (next.needsModel) packErr = '该宠物包需要先在下方绑定 Live2D 模型目录';
+            else { pack = next; prefs.pack = pack.id; reload = true; }
+          }
         }
         savePrefs();
         if (reload && petWin && !petWin.isDestroyed()) {
@@ -523,21 +592,32 @@ module.exports = {
           send('prefs', prefsPayload());
         }
         pushState();
-        return { ok: true };
+        return packErr ? { ok: true, packError: packErr } : { ok: true };
       },
       quip: (args = {}) => sendQuip(args && args.text),
+      /* native picker for the Live2D model root (panel button) */
+      chooseModelDir: async () => {
+        const { dialog } = require('electron');
+        const host = ctx.getHostWindow && ctx.getHostWindow();
+        const res = await dialog.showOpenDialog(
+          host && !host.isDestroyed() ? host : undefined,
+          { properties: ['openDirectory'], title: '选择 Live2D 模型目录（含 .model3.json 的根）' },
+        );
+        return res.canceled ? { ok: false, canceled: true } : { ok: true, dir: res.filePaths[0] };
+      },
       /* programmatic file drop (same router as the DOM drop; used by smoke
          and available to future workflow action nodes) */
       fileDrop: (args = {}) => handleFileDrop(args),
       play: (args = {}) => {
         if (!args.anim) return { ok: false, error: 'anim required' };
-        const anim = activeAnims().find(a => a.name === args.anim);
-        if (!anim) return { ok: false, error: 'unknown anim' };
+        if (!supportsAnim(args.anim)) return { ok: false, error: 'unknown anim' };
         if (isLocked() && args.lock !== lock.id) {
           return { ok: false, reason: args.lock ? 'lock-lost' : 'lock-required' };
         }
         const playbackId = newPlaybackId();
-        const once = typeof args.once === 'boolean' ? args.once : !!anim.once;
+        // once undefined => the renderer resolves it from pack metadata (webm
+        // anim.once / live2d mapping), which is where engine truth lives
+        const once = typeof args.once === 'boolean' ? args.once : undefined;
         notePlayback(playbackId, { anim: args.anim, status: 'pending' });
         if (prefs.visible) { ensureWindow(); send('play', { anim: args.anim, once, playbackId }); }
         return { ok: true, playbackId };
@@ -590,6 +670,8 @@ module.exports = {
       /* TTS voices & live preview */
       getVoices: () => ({ ok: true, voices: ttsService.getPresetVoices() }),
       previewVoice: async (args = {}) => {
+        const engine = args.engine || prefs.voiceEngine || 'edge-tts';
+        if (engine === 'system') return { ok: true, engine: 'system' };
         const sample = (prefs.lang === 'en' || args.lang === 'en')
           ? 'Hello! I am your desktop pet, nice to meet you!'
           : '你好呀，我是小轨桌宠，今天也要开开心心哦！';
@@ -627,12 +709,11 @@ module.exports = {
     /* The toolbox's own orchestration gets a live on-shoulder audience:
        working while a run flies, celebrate/error at the finish line, plus a
        bubble. A takeover lock or the panel kill-switch (wfOn) silences it. */
-    const hasAnim = name => activeAnims().some(a => a.name === name);
+    const hasAnim = name => supportsAnim(name);
     const playStateAnim = (name) => {
       if (!prefs.visible || !hasAnim(name) || isLocked()) return;
       ensureWindow();
-      const anim = activeAnims().find(a => a.name === name);
-      send('play', { anim: name, once: !!anim.once, playbackId: null });
+      send('play', { anim: name, once: undefined, playbackId: null }); // pack metadata decides once per engine
     };
     const reactBubble = (text) => {
       if (prefs.bubbleOn && !isLocked() && petWin && !petWin.isDestroyed() && petWin.isVisible()) {

@@ -80,8 +80,8 @@ body { display: flex; flex-direction: column; }
   pointer-events: none;
   z-index: 9;
 }
-body.slingready #stage video { transform: scaleY(.86) translateY(7%); transition: transform .16s ease; }
-#stage.spin video { animation: pet-spin .65s cubic-bezier(.3, .7, .4, 1); }
+body.slingready #stage .pet-body { transform: scaleY(.86) translateY(7%); transition: transform .16s ease; }
+#stage.spin .pet-body { animation: pet-spin .65s cubic-bezier(.3, .7, .4, 1); }
 @keyframes pet-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 /* --- drop feedback ------------------------------------------------------------ */
@@ -93,19 +93,19 @@ body.dropover #stage::after {
   pointer-events: none;
 }
 
-/* --- video stage (pet body) ----------------------------------------------------- */
+/* --- pet stage (body): video buffers for webm, canvas for live2d ---------- */
 #stage {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
 }
-#stage video {
+#stage .pet-body {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  object-fit: contain;
   background: transparent;
 }
-#stage video.back { visibility: hidden; }
+#stage video.pet-body { object-fit: contain; }
+#stage .pet-body.back { visibility: hidden; }
 #stage.flip { transform: scaleX(-1); }
 
 /* click Q弹: squash & stretch, applied to the stage so it composes with flip */

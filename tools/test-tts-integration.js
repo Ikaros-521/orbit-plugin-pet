@@ -57,10 +57,15 @@ app.whenReady().then(async () => {
   assert.strictEqual(state.prefs.voice, 'zh-CN-XiaoyiNeural');
   assert.strictEqual(state.prefs.voiceRate, 15);
   assert.strictEqual(state.prefs.voicePitch, 25);
-  ok('setPrefs voice options verified');
+  assert(Array.isArray(state.voices) && state.voices.length >= 8, 'state must include voices list');
+  ok('setPrefs voice options and state.voices verified');
 
-  // 3. Test previewVoice API
+  // 3. Test previewVoice API (both edge-tts and system engine)
   console.log('Testing previewVoice...');
+  const sysPrev = await manager.call('desktop-pet', 'previewVoice', { engine: 'system' });
+  assert(sysPrev && sysPrev.ok && sysPrev.engine === 'system', 'previewVoice with system engine must return ok: true');
+  ok('previewVoice system engine verified');
+
   const t0 = Date.now();
   const prevRes = await manager.call('desktop-pet', 'previewVoice', {
     text: '你好呀，我是小轨！',
