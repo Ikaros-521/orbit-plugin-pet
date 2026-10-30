@@ -41,6 +41,10 @@ app.whenReady().then(async () => {
 
   const cfg = new Config(tmp);
   const manager = new PluginManager({ userDataDir: tmp, config: cfg, getHostWindow: () => null });
+  /* mock the core workflow bus so the reaction chain runs end-to-end */
+  let wfBusFn = null;
+  manager.workflowManager = { onWorkflowEvent: fn => { wfBusFn = fn; return () => {}; } };
+  const wfEmit = payload => { if (!wfBusFn) throw new Error('plugin never subscribed to workflows'); wfBusFn(payload); };
   registerPluginProtocol(manager);
   manager.discover();
 
@@ -113,6 +117,27 @@ app.whenReady().then(async () => {
   await manager.call('desktop-pet', 'setPrefs', { bubbleOn: true });
   ok('bubbleOn gate respected');
 
+  /* --- workflow reactions --------------------------------------------------- */
+  wfEmit({ event: 'run-start', name: '冒烟流', trigger: 'manual' });
+  let sW = null;
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    sW = (await manager.call('desktop-pet', 'getState')).status;
+    if (sW && sW.anim === 'working') break;
+  }
+  if (!sW || sW.anim !== 'working') fail(`run-start did not switch to working (anim=${sW && sW.anim})`);
+  ok('workflow run-start -> working animation');
+
+  wfEmit({ event: 'run-finish', name: '冒烟流', trigger: 'manual', ok: true });
+  let sC = null, sCb = false;
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    sC = (await manager.call('desktop-pet', 'getState')).status;
+    if (sC && sC.anim === 'celebrate') { sCb = !!sC.bubble; break; }
+  }
+  if (!sC || sC.anim !== 'celebrate') fail(`run-finish did not celebrate (anim=${sC && sC.anim})`);
+  ok(`workflow run-finish -> celebrate${sCb ? ' + reaction bubble' : ''}`);
+
   /* --- drag & toss simulation --------------------------------------------------
      Synthetic PointerEvents with explicit screenX keep the velocity samples
      deterministic; sendInputEvent would re-derive them from the live window
@@ -156,6 +181,33 @@ app.whenReady().then(async () => {
   const sFin = (await manager.call('desktop-pet', 'getState')).status;
   if (petWin.isDestroyed()) fail('window died during toss');
   ok(`flick tossed and settled cleanly (anim=${sFin.anim})`);
+
+  /* --- occupation lock + playback receipt + user-revoke --------------------- */
+  const lk = await manager.call('desktop-pet', 'lock', { ttl: 30000, owner: 'smoke' });
+  if (!lk.ok || !lk.lockId) fail('lock acquire: ' + JSON.stringify(lk));
+  const pNoLock = await manager.call('desktop-pet', 'play', { anim: 'idle' });
+  if (pNoLock.ok || pNoLock.reason !== 'lock-required') fail('play without lock must be lock-required: ' + JSON.stringify(pNoLock));
+  const quipLocked = await manager.call('desktop-pet', 'quip'); // self-chatter yields to a takeover
+  if (quipLocked.ok) fail('spontaneous quip should yield during lock');
+  const renewal = await manager.call('desktop-pet', 'lock', { lockId: lk.lockId });
+  if (!renewal.renewed) fail('lock renew: ' + JSON.stringify(renewal));
+  const pLock = await manager.call('desktop-pet', 'play', { anim: 'happy', lock: lk.lockId });
+  if (!pLock.ok || !pLock.playbackId) fail('play with lock: ' + JSON.stringify(pLock));
+  let rec = null;
+  for (let i = 0; i < 24; i++) {
+    await sleep(300);
+    rec = await manager.call('desktop-pet', 'playback', { id: pLock.playbackId });
+    if (rec.ok && rec.status === 'done') break;
+  }
+  if (!rec.ok || rec.status !== 'done') fail(`playback receipt stuck at ${rec.status}`);
+  ok(`lock gates play/quip, renewal + playback receipt done (${rec.anim})`);
+
+  // a user click revokes the takeover (pointerdown -> touch -> backend unlock)
+  await dragSim([[0, 0, 30]]); // press+release in place: click, not drag
+  await sleep(500);
+  const stRevoked = await manager.call('desktop-pet', 'getState');
+  if (stRevoked.lock && stRevoked.lock.active) fail('user touch did not revoke the lock');
+  ok('user touch revoked the lock');
 
   /* --- prefs ------------------------------------------------------------------ */
   await manager.call('desktop-pet', 'setPrefs', { size: 320, autoWalk: false });

@@ -32,6 +32,7 @@ module.exports = {
       autoWalk: true,
       bubbleOn: true,
       voiceOn: false,
+      wfOn: true,          // react to workflow runs with state animations
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
       x: null,
       y: null,
@@ -187,11 +188,13 @@ module.exports = {
       prefs: { pack: pack.id, ...prefsPayload() },
       visible: !!(petWin && !petWin.isDestroyed() && petWin.isVisible()),
       status: lastStatus,
+      // pure read: lazy expiry happens in isLocked() on the interaction paths
+      lock: lock ? { active: Date.now() < lock.expiresAt, owner: lock.owner, expiresAt: lock.expiresAt } : { active: false },
     });
     const pushState = () => ctx.send('state', stateFor());
     const prefsPayload = () => ({
       size: prefs.size, autoWalk: prefs.autoWalk, bubbleOn: prefs.bubbleOn,
-      voiceOn: prefs.voiceOn, lang: prefs.lang, margin: marginH(prefs.size),
+      voiceOn: prefs.voiceOn, wfOn: prefs.wfOn, lang: prefs.lang, margin: marginH(prefs.size),
     });
 
     /* --- quips (local chatter) ---------------------------------------------- */
@@ -225,6 +228,7 @@ module.exports = {
     let quipTimer = null;
     const sendQuip = (text) => {
       if (!prefs.bubbleOn) return { ok: false, error: 'bubble is off' };
+      if (text === undefined && isLocked()) return { ok: false, error: 'locked' }; // self-chatter yields to a takeover
       const rt = petWin && !petWin.isDestroyed() && petWin.isVisible();
       if (!rt) return { ok: false, error: 'pet is hidden' };
       const body = typeof text === 'string' && text.trim() ? text.trim().slice(0, 200) : pickQuip();
@@ -237,6 +241,31 @@ module.exports = {
       quipTimer.unref?.();
     };
     scheduleQuip();
+
+    /* --- occupation lock + playback receipts ---------------------------------- */
+
+    /* Same contract as dsh-pet: an external caller (a workflow node, another
+       plugin, a script over IPC) locks the pet to own its stage — the pet's
+       self-chatter falls silent and external play/broadcast calls must carry
+       the lockId. A user touch revokes the lock instantly: user always wins. */
+    let lock = null; // { id, owner, expiresAt }
+    const playbacks = new Map(); // playbackId -> { anim, status, ts }
+
+    const isLocked = () => {
+      if (lock && Date.now() < lock.expiresAt) return true;
+      if (lock) {
+        lock = null;
+        send('lock', { locked: false });
+        pushState();
+      }
+      return false;
+    };
+    const newPlaybackId = () => `pb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+    const notePlayback = (id, patch) => {
+      if (!id) return;
+      playbacks.set(id, { ...(playbacks.get(id) || {}), ...patch, ts: Date.now() });
+      while (playbacks.size > 40) playbacks.delete(playbacks.keys().next().value);
+    };
 
     /* --- sprite-window ipc --------------------------------------------------- */
 
@@ -258,6 +287,17 @@ module.exports = {
         } catch { /* window torn down mid-handshake */ }
       }),
       on('status', (_e, s) => { lastStatus = s; }),
+      // a user grabbing the pet revokes any external takeover (user wins)
+      on('touch', () => {
+        if (isLocked()) {
+          lock = null;
+          send('lock', { locked: false });
+          pushState();
+        }
+      }),
+      on('playback-report', (_e, { id, status } = {}) => {
+        if (id && playbacks.has(id)) notePlayback(id, { status });
+      }),
       // movement / drag: clamp into a real display so the pet can't get lost
       on('set-bounds', (_e, b) => {
         if (!b) return;
@@ -320,6 +360,7 @@ module.exports = {
         if (typeof args.autoWalk === 'boolean') prefs.autoWalk = args.autoWalk;
         if (typeof args.bubbleOn === 'boolean') prefs.bubbleOn = args.bubbleOn;
         if (typeof args.voiceOn === 'boolean') prefs.voiceOn = args.voiceOn;
+        if (typeof args.wfOn === 'boolean') prefs.wfOn = args.wfOn;
         if (args.lang === 'zh' || args.lang === 'en') prefs.lang = args.lang;
         if (typeof args.size === 'number' && args.size >= 120 && args.size <= 480 && args.size !== prefs.size) {
           prefs.size = Math.round(args.size);
@@ -349,9 +390,61 @@ module.exports = {
       quip: (args = {}) => sendQuip(args && args.text),
       play: (args = {}) => {
         if (!args.anim) return { ok: false, error: 'anim required' };
-        if (!pack.cfg.anims.some(a => a.name === args.anim)) return { ok: false, error: 'unknown anim' };
-        if (prefs.visible) { ensureWindow(); send('play', { anim: args.anim, once: args.once !== false }); }
-        return { ok: true };
+        const anim = pack.cfg.anims.find(a => a.name === args.anim);
+        if (!anim) return { ok: false, error: 'unknown anim' };
+        if (isLocked() && args.lock !== lock.id) {
+          return { ok: false, reason: args.lock ? 'lock-lost' : 'lock-required' };
+        }
+        const playbackId = newPlaybackId();
+        const once = typeof args.once === 'boolean' ? args.once : !!anim.once;
+        notePlayback(playbackId, { anim: args.anim, status: 'pending' });
+        if (prefs.visible) { ensureWindow(); send('play', { anim: args.anim, once, playbackId }); }
+        return { ok: true, playbackId };
+      },
+      /* external feed of given text (dsh-pet /broadcast equivalent) */
+      broadcast: (args = {}) => {
+        if (isLocked() && args.lock !== (lock && lock.id)) {
+          return { ok: false, reason: args.lock ? 'lock-lost' : 'lock-required' };
+        }
+        return sendQuip(args && args.text);
+      },
+      /* occupation lock: acquire (or renew with matching lockId) / inspect */
+      lock: (args = {}) => {
+        const now = Date.now();
+        const ttl = Math.min(600000, Math.max(1000, Number(args.ttl) || 60000));
+        if (isLocked()) {
+          if (args.lockId === lock.id) {
+            lock.expiresAt = now + ttl;
+            pushState();
+            return { ok: true, lockId: lock.id, expiresAt: lock.expiresAt, renewed: true };
+          }
+          return { ok: false, reason: 'lock-lost', cause: 'held-by-other' };
+        }
+        if (args.lockId) return { ok: false, reason: 'lock-lost', cause: 'expired-or-released' };
+        lock = {
+          id: `lk-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          owner: typeof args.owner === 'string' ? args.owner : null,
+          expiresAt: now + ttl,
+        };
+        send('lock', { locked: true });
+        pushState();
+        return { ok: true, lockId: lock.id, expiresAt: lock.expiresAt };
+      },
+      unlock: (args = {}) => {
+        if (!lock) return { ok: true, released: false };
+        if (!args.force && args.lockId !== lock.id) return { ok: false, reason: 'lock-lost' };
+        const cause = args.force ? 'user' : 'released';
+        lock = null;
+        send('lock', { locked: false });
+        pushState();
+        return { ok: true, released: true, cause };
+      },
+      /* playback receipt: pending -> playing -> done | failed (once anims) */
+      playback: (args = {}) => {
+        const id = String((args && args.id) || '');
+        const p = playbacks.get(id);
+        if (!p) return { ok: false, reason: 'unknown-playback' };
+        return { ok: true, id, ...p };
       },
       resetPosition: () => {
         const { width, height } = winSize(prefs.size);
@@ -369,6 +462,40 @@ module.exports = {
     const petApi = pctx.get('petApi');
 
     for (const [method, fn] of Object.entries(petApi)) ctx.ipc.handle(method, fn);
+
+    /* --- workflow reactions ---------------------------------------------------- */
+
+    /* The toolbox's own orchestration gets a live on-shoulder audience:
+       working while a run flies, celebrate/error at the finish line, plus a
+       bubble. A takeover lock or the panel kill-switch (wfOn) silences it. */
+    const hasAnim = name => pack.cfg.anims.some(a => a.name === name);
+    const playStateAnim = (name) => {
+      if (!prefs.visible || !hasAnim(name) || isLocked()) return;
+      ensureWindow();
+      const anim = pack.cfg.anims.find(a => a.name === name);
+      send('play', { anim: name, once: !!anim.once, playbackId: null });
+    };
+    const reactBubble = (text) => {
+      if (prefs.bubbleOn && !isLocked() && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
+        send('bubble', { text });
+      }
+    };
+    let unsubWf = null;
+    if (ctx.workflows && typeof ctx.workflows.onWorkflowEvent === 'function') {
+      unsubWf = ctx.workflows.onWorkflowEvent(ev => {
+        if (!prefs.wfOn) return;
+        const name = ev.name || ev.id || '工作流';
+        if (ev.event === 'run-start') {
+          playStateAnim('working');
+          reactBubble(`工作流「${name}」跑起来了…`);
+        } else if (ev.event === 'run-finish') {
+          playStateAnim(ev.ok ? 'celebrate' : 'error');
+          reactBubble(ev.ok
+            ? `工作流「${name}」完成 ✓`
+            : `⚠ 工作流「${name}」出错：${String(ev.error || '').slice(0, 60)}`);
+        }
+      });
+    }
 
     /* --- lifecycle ------------------------------------------------------------ */
 
@@ -389,6 +516,7 @@ module.exports = {
       clearTimeout(savePosTimer);
       clearTimeout(quipTimer);
       clearInterval(topmostTimer);
+      if (unsubWf) { try { unsubWf(); } catch { /* core already gone */ } }
       screen.removeListener('display-metrics-changed', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);
       for (const off of offs) off();

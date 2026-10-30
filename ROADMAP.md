@@ -14,11 +14,12 @@ dsh-pet 锚定 DSH 会话，我们的联动对象换成工具箱自己的状态�
 
 ## Phase 2 · v0.3 「懂你的活」——工具箱状态联动（核心差异化）
 
-- [ ] workflows 六档动画：排队→waiting、运行→working、成功→celebrate、失败→error（DAG 事件流订阅）
-- [ ] ai-chat 会话联动：生成中→thinking、工具调用→busy、完成→success+气泡摘要
-- [ ] 占场锁：照抄 dsh-pet 的 lock 契约（lockId/续期/过期；用户一摸宠物立刻撤锁，用户优先）
-- [ ] playbackId 播放回执：点播可 await（工作流节点"让桌宠播完 X 再继续"）
-- [ ] 系统通知：workflow 完成 → 气泡 + 通知点击跳回工具箱（open-plugin 路由已有）
+- [x] workflows 状态动画：运行中→working、成功→celebrate、失败→error（订阅 core `onWorkflowEvent` 总线；waiting/thinking 素材已备，接入点随 ai-chat）
+- [x] 占场锁：dsh-pet 同款契约——acquire/renew/ttl、外部 play/broadcast 必须带 lockId、自播（idle/walk/碎碎念）让路、**用户一碰宠物立即撤锁**
+- [x] playbackId 播放回执：pending → playing → done | failed，点播方可 await（`playback` API）
+- [x] 事件面配套（core）：WorkflowManager 进程内订阅总线 + run/auto 双路 run-start/run-finish 里程碑（`auto-run` 镜像语义不变）
+- [ ] ai-chat 会话联动：生成中→thinking、工具调用→busy、完成→success+气泡摘要（需 ai-chat 暴露事件/状态面，避开并行热区单独立项）
+- [ ] 系统通知：workflow 完成 → 通知点击跳回工具箱（open-plugin 路由已有，待接）
 - [ ] AI 碎碎念接 ai-chat provider
 
 ## Phase 3 · v0.4 「有手脚」——交互深化

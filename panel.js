@@ -67,6 +67,11 @@
               <span class="dpet-row-label">${t('语音朗读', 'Read aloud')}</span>
               <span class="dpet-hint">${t('用系统声音念出气泡', 'System voice speaks bubbles')}</span>
             </label>
+            <label class="dpet-row dpet-check">
+              <input class="dpet-wf" type="checkbox" />
+              <span class="dpet-row-label">${t('工作流联动', 'Workflow reactions')}</span>
+              <span class="dpet-hint">${t('运行时打工、成功庆祝、失败难过', 'Working / celebrate / error on workflow runs')}</span>
+            </label>
             <div class="dpet-row">
               <button type="button" class="dpet-quip btn ghost small">${t('说一句', 'Say something')}</button>
               <span class="dpet-quip-result"></span>
@@ -88,7 +93,7 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
-        bubble: $('.dpet-bubble'), voice: $('.dpet-voice'),
+        bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         quip: $('.dpet-quip'), quipResult: $('.dpet-quip-result'),
         anim: $('.dpet-anim'), credit: $('.dpet-credit'), derived: $('.dpet-derived'),
       };
@@ -122,6 +127,7 @@
         els.walk.checked = !!prefs.autoWalk;
         els.bubble.checked = !!prefs.bubbleOn;
         els.voice.checked = !!prefs.voiceOn;
+        els.wf.checked = prefs.wfOn !== false;
 
         if (status && Number.isFinite(status.x)) {
           els.anim.textContent = `${LABELS.pos()}: ${status.x}, ${status.y}`;
@@ -147,6 +153,7 @@
       els.walk.addEventListener('change', () => { call('setPrefs', { autoWalk: els.walk.checked }); });
       els.bubble.addEventListener('change', () => { call('setPrefs', { bubbleOn: els.bubble.checked }); });
       els.voice.addEventListener('change', () => { call('setPrefs', { voiceOn: els.voice.checked }); });
+      els.wf.addEventListener('change', () => { call('setPrefs', { wfOn: els.wf.checked }); });
       els.quip.addEventListener('click', async () => {
         const res = await call('quip');
         const d = res && res.ok ? res.data : { ok: false, error: res && res.error };

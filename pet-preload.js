@@ -10,9 +10,12 @@ contextBridge.exposeInMainWorld('pet', {
   setBounds: b => ipcRenderer.send(`${P}set-bounds`, b),
   setIgnore: ignore => ipcRenderer.send(`${P}set-ignore`, { ignore }),
   contextMenu: () => ipcRenderer.send(`${P}context-menu`),
+  touch: () => ipcRenderer.send(`${P}touch`),
+  reportPlayback: (id, status) => ipcRenderer.send(`${P}playback-report`, { id, status }),
   onInit: fn => ipcRenderer.on(`${P}init`, (_e, payload) => fn(payload)),
   onPrefs: fn => ipcRenderer.on(`${P}prefs`, (_e, payload) => fn(payload)),
   onBubble: fn => ipcRenderer.on(`${P}bubble`, (_e, payload) => fn(payload)),
+  onLock: fn => ipcRenderer.on(`${P}lock`, (_e, payload) => fn(payload)),
   onPlay: fn => ipcRenderer.on(`${P}play`, (_e, payload) => fn(payload)),
   onDisplays: fn => ipcRenderer.on(`${P}displays`, (_e, payload) => fn(payload)),
 });

@@ -1,0 +1,14 @@
+{
+  "name": "orbit-plugin-pet",
+  "version": "0.2.0",
+  "description": "Desktop Pet plugin for Orbit Toolbox",
+  "main": "backend.js",
+  "author": "Ikaros-521",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test:tts": "node tools/test-tts.js"
+  },
+  "dependencies": {
+    "@andresaya/edge-tts": "^1.9.1"
+  }
+}

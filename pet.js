@@ -50,11 +50,16 @@
 
   /* Swap in `name`. Loads in the back buffer, swaps when it has frames, and
      always releases the pending slot on failure/timeout so later switches
-     still work. onEnd fires when a one-shot finishes (or fails). */
-  function switchTo(name, once, onEnd) {
+     still work. onEnd fires when a one-shot finishes (or fails).
+     playbackId (optional) turns this switch into a reported receipt:
+     pending -> playing -> done | failed, which the backend hands to callers
+     that await a workflow node or external integration. */
+  const reportPlayback = (id, status) => { if (id) window.pet.reportPlayback(id, status); };
+
+  function switchTo(name, once, onEnd, playbackId) {
     const a = cfg.anims.find(x => x.name === name);
-    if (!a) { if (onEnd) onEnd(); return; }
-    if (name === current) { if (onEnd) onEnd(); return; } // 防重：目标已在播
+    if (!a) { reportPlayback(playbackId, 'failed'); if (onEnd) onEnd(); return; }
+    if (name === current) { reportPlayback(playbackId, 'playing'); if (onEnd) onEnd(); return; } // 防重：目标已在播
     const myGen = ++gen;
     clearTimeout(loadTimer);
     onceDone = onEnd || null;
@@ -63,6 +68,7 @@
     const giveUp = why => {
       if (myGen !== gen) return;
       clearTimeout(loadTimer);
+      reportPlayback(playbackId, 'failed');
       if (onceDone) { const cb = onceDone; onceDone = null; cb(); }
       console.warn('[desktop-pet] anim load failed:', name, why);
     };
@@ -77,8 +83,9 @@
       backEl().classList.add('back');
       backEl().pause();
       current = name;
+      reportPlayback(playbackId, 'playing');
       if (a.once || once) {
-        el.onended = () => { el.onended = null; if (myGen === gen && onceDone) { const cb = onceDone; onceDone = null; cb(); } };
+        el.onended = () => { el.onended = null; reportPlayback(playbackId, 'done'); if (myGen === gen && onceDone) { const cb = onceDone; onceDone = null; cb(); } };
       } else {
         el.onended = null;
       }
@@ -100,7 +107,8 @@
 
   function scheduleIdle() {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking) idle(); }, 6000 + Math.random() * 8000);
+    if (prefs.locked) return; // takeover owns the stage; onLock(false) reschedules
+    idleTimer = setTimeout(() => { if (!dragging && !airborne && !walking && !prefs.locked) idle(); }, 6000 + Math.random() * 8000);
   }
 
   /* --- window position ------------------------------------------------------ */
@@ -195,9 +203,9 @@
 
   function scheduleWalk() {
     clearTimeout(walkTimer);
-    if (!prefs.autoWalk) return;
+    if (!prefs.autoWalk || prefs.locked) return;
     walkTimer = setTimeout(() => {
-      if (dragging || airborne || walking || !cfg) { scheduleWalk(); return; }
+      if (dragging || airborne || walking || !cfg || prefs.locked) { scheduleWalk(); return; }
       const wa = (currentDisplay() || {}).workArea;
       if (!wa) return;
       const margin = prefs.size * 0.6;
@@ -266,6 +274,7 @@
     if (e.button !== 0) return;
     dragging = true;
     stage.classList.add('dragging');
+    window.pet.touch(); // a user grab revokes any external takeover (main side)
     stopLoops();
     if (!movePending) { shadowX = window.screenX; shadowY = window.screenY; } // idle = OS is the authority
     downAt = performance.now();
@@ -448,9 +457,16 @@
     if (p.voiceOn === false && 'speechSynthesis' in window) window.speechSynthesis.cancel();
   });
   window.pet.onBubble(({ text } = {}) => showBubble(text));
-  window.pet.onPlay(({ anim, once }) => {
+  window.pet.onPlay(({ anim, once, playbackId }) => {
     stopLoops();
-    switchTo(anim, once, () => { idle(); scheduleIdle(); scheduleWalk(); });
+    switchTo(anim, once, () => { idle(); scheduleIdle(); scheduleWalk(); }, playbackId || null);
+    // a loop animation dispatched without a finish event (e.g. a workflow run
+    // that never reports back) must not strand the pet — self-heal to idle
+    if (!once) scheduleIdle();
+  });
+  window.pet.onLock(({ locked } = {}) => {
+    prefs.locked = !!locked;
+    if (!prefs.locked) { scheduleIdle(); scheduleWalk(); }
   });
   window.pet.onDisplays(list => { displays = list; });
 

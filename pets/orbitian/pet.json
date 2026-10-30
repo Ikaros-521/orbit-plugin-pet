@@ -16,6 +16,11 @@
     { "name": "idle",  "file": "idle.webm",  "weight": 4, "role": "idle" },
     { "name": "walk",  "file": "walk.webm",  "weight": 0, "role": "walk" },
     { "name": "happy", "file": "happy.webm", "weight": 1, "role": "click", "once": true },
-    { "name": "sleep", "file": "sleep.webm", "weight": 1, "role": "idle" }
+    { "name": "sleep", "file": "sleep.webm", "weight": 1, "role": "idle" },
+    { "name": "thinking",  "file": "thinking.webm",  "weight": 0, "role": "state" },
+    { "name": "working",   "file": "working.webm",   "weight": 0, "role": "state" },
+    { "name": "waiting",   "file": "waiting.webm",   "weight": 0, "role": "state" },
+    { "name": "celebrate", "file": "celebrate.webm", "weight": 0, "role": "state", "once": true },
+    { "name": "error",     "file": "error.webm",     "weight": 0, "role": "state", "once": true }
   ]
 }

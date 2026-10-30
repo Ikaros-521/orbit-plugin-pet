@@ -73,9 +73,22 @@ function segment(x1, y1, x2, y2, w, fill) {
 
 function plus(cx, cy, r, w, fill) {
   return [
-    segment(cx - r, cy, cx + r, cy, w, fill),
-    segment(cx, cy - r, cx, cy + r, w, fill),
+    segment(cx - r, cy - r, cx + r, cy + r, w, fill),
+    segment(cx - r, cy + r, cx + r, cy - r, w, fill),
   ];
+}
+
+function rect(x0, y0, x1, y1, fill) {
+  const hw = (x1 - x0) / 2, hh = (y1 - y0) / 2;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  return {
+    bbox: [x0 - 1, y0 - 1, x1 + 1, y1 + 1],
+    sdf(x, y) {
+      const qx = Math.abs(x - cx) - hw, qy = Math.abs(y - cy) - hh;
+      return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0);
+    },
+    fill: typeof fill === 'function' ? fill : () => fill,
+  };
 }
 
 /* paint one frame: shapes are drawn in order onto a transparent RGBA buffer */
@@ -123,42 +136,47 @@ const BODY = { cx: 160, cy: 104, rx: 62, ry: 55 };
 const EYE = { y: 96, dx: 22, rx: 6.5, ry: 9 };
 const FLOOR = 158;
 
-function bodyShapes({ sx = 1, sy = 1, dy = 0, feet = null, shadow = 1 }) {
+function bodyShapes({ sx = 1, sy = 1, dx = 0, dy = 0, feet = null, shadow = 1, fill = C.bodyGrad }) {
   const shapes = [];
   if (shadow > 0.05) {
-    shapes.push(ellipse(BODY.cx, FLOOR + 6, 54 * shadow, 8 * shadow, () => C.shadow));
+    shapes.push(ellipse(BODY.cx + dx, FLOOR + 6, 54 * shadow, 8 * shadow, () => C.shadow));
   }
-  shapes.push(ellipse(BODY.cx, BODY.cy + dy, BODY.rx, BODY.ry, C.bodyGrad, { sx, sy }));
+  shapes.push(ellipse(BODY.cx + dx, BODY.cy + dy, BODY.rx, BODY.ry, fill, { sx, sy }));
   if (feet) {
     const { liftL, liftR } = feet;
     const fy = 1 - Math.min(liftL, 20) / 26; // squash as the foot lifts, floored
-    shapes.push(ellipse(BODY.cx - 26, FLOOR - 6 - liftL, 13, 10, () => C.foot, { sy: fy }));
-    shapes.push(ellipse(BODY.cx + 26, FLOOR - 6 - liftR, 13, 10, () => C.foot, { sy: fy }));
+    shapes.push(ellipse(BODY.cx - 26 + dx, FLOOR - 6 - liftL, 13, 10, () => C.foot, { sy: fy }));
+    shapes.push(ellipse(BODY.cx + 26 + dx, FLOOR - 6 - liftR, 13, 10, () => C.foot, { sy: fy }));
   }
   return shapes;
 }
 
-function faceShapes({ eye = 1, mouth = 'smile', dy = 0 }) {
+/* eyeDx/eyeDy shift the whole eye pair (gaze direction); mouth stays put. */
+function faceShapes({ eye = 1, mouth = 'smile', dy = 0, dx = 0, eyeDx = 0, eyeDy = 0 }) {
   const shapes = [];
   for (const side of [-1, 1]) {
-    const ex = BODY.cx + side * EYE.dx;
+    const ex = BODY.cx + side * EYE.dx + dx + eyeDx;
+    const ey = EYE.y + dy + eyeDy;
     if (eye > 0.25) {
-      shapes.push(ellipse(ex, EYE.y + dy, EYE.rx, EYE.ry * eye, () => C.dark));
-      if (eye > 0.7) shapes.push(ellipse(ex + 2, EYE.y - 3 + dy, 2.2, 2.6, () => C.glint));
+      shapes.push(ellipse(ex, ey, EYE.rx, EYE.ry * eye, () => C.dark));
+      if (eye > 0.7) shapes.push(ellipse(ex + 2, ey - 3, 2.2, 2.6, () => C.glint));
     } else {
       // blink / closed lid: gentle downward arc
-      shapes.push(arcStroke(ex, EYE.y + dy, 7, Math.PI * 0.15, Math.PI * 0.85, 2.4, C.dark));
+      shapes.push(arcStroke(ex, ey, 7, Math.PI * 0.15, Math.PI * 0.85, 2.4, C.dark));
     }
   }
-  shapes.push(ellipse(BODY.cx - 42, 120 + dy, 11, 6.5, () => C.blush));
-  shapes.push(ellipse(BODY.cx + 42, 120 + dy, 11, 6.5, () => C.blush));
+  shapes.push(ellipse(BODY.cx - 42 + dx, 120 + dy, 11, 6.5, () => C.blush));
+  shapes.push(ellipse(BODY.cx + 42 + dx, 120 + dy, 11, 6.5, () => C.blush));
+  const mx = BODY.cx + dx;
   if (mouth === 'smile') {
-    shapes.push(arcStroke(BODY.cx, 114 + dy, 12, Math.PI * 0.18, Math.PI * 0.82, 2.6, C.mouth));
+    shapes.push(arcStroke(mx, 114 + dy, 12, Math.PI * 0.18, Math.PI * 0.82, 2.6, C.mouth));
+  } else if (mouth === 'flat') {
+    shapes.push(segment(mx - 8, 119 + dy, mx + 8, 119 + dy, 2.4, C.mouth));
   } else if (mouth === 'open') {
-    shapes.push(ellipse(BODY.cx, 120 + dy, 7, 8, () => C.mouth));
-    shapes.push(ellipse(BODY.cx, 123 + dy, 4.4, 4.6, () => rgba(hex('#ff8fa3'), 0.95)));
+    shapes.push(ellipse(mx, 120 + dy, 7, 8, () => C.mouth));
+    shapes.push(ellipse(mx, 123 + dy, 4.4, 4.6, () => rgba(hex('#ff8fa3'), 0.95)));
   } else if (mouth === 'o') {
-    shapes.push(ellipse(BODY.cx, 119 + dy, 4.6, 5.2, () => C.mouth));
+    shapes.push(ellipse(mx, 119 + dy, 4.6, 5.2, () => C.mouth));
   }
   return shapes;
 }
@@ -236,6 +254,92 @@ const ANIMS = {
       shapes.push(...zGlyph(196 + p * 26, 74 - p * 34, 5 + i * 1.6 + p * 3, 2.6, 0.85 * fade));
     }
     return shapes;
+  } },
+
+  /* ===== state animations (workflow / agent linkage, role:state) ===== */
+
+  /* 3s loop: head sway, upward gaze, three thought dots rising at top right */
+  thinking: { frames: 90, build(t) {
+    const swx = 6 * Math.sin(TAU * t);
+    const bob = 2 * Math.sin(TAU * 2 * t);
+    const shapes = [
+      ...bodyShapes({ sy: 1.01, dx: swx, dy: bob, feet: { liftL: 0, liftR: 0 } }),
+      ...faceShapes({ eye: 1, dx: swx, dy: bob, eyeDx: -2, eyeDy: -4 }),
+    ];
+    for (let i = 0; i < 3; i++) {
+      const p = (t + i / 3) % 1;
+      const fade = Math.sin(Math.PI * p);
+      shapes.push(ellipse(228 + i * 9, 70 - p * 16, 3.4, 3.4, () => rgba(C.gold, 0.9 * fade)));
+    }
+    return shapes;
+  } },
+
+  /* 1.2s loop: 2Hz typing bob, gaze at a small screen bottom-left with
+     blinking code lines */
+  working: { frames: 36, build(t) {
+    const ph = t * 2;
+    const bob = Math.abs(Math.sin(TAU * ph)) * 4;
+    const swx = 1.5 * Math.sin(TAU * ph);
+    const shapes = [
+      rect(44, 112, 112, 160, rgba(hex('#22344d'), 0.96)),
+    ];
+    for (let i = 0; i < 4; i++) {
+      const lit = ((t * 3 + i) % 1) > 0.45 ? 0.95 : 0.3;
+      const len = i % 2 ? 44 : 30;
+      shapes.push(segment(54, 122 + i * 9, 54 + len, 122 + i * 9, 2.6, rgba(hex('#9fe6b2'), lit)));
+    }
+    shapes.push(...bodyShapes({
+      sy: 1 - 0.02 * Math.sin(TAU * ph), dx: swx, dy: -bob,
+      feet: { liftL: 0, liftR: 0 }, shadow: 1 - bob / 22,
+    }));
+    shapes.push(...faceShapes({ eye: 1, dx: swx, dy: -bob, eyeDx: -9, eyeDy: 5, mouth: 'flat' }));
+    return shapes;
+  } },
+
+  /* 4s loop: gentle left-right sway, half-lidded eyes, flat mouth — waiting */
+  waiting: { frames: 120, build(t) {
+    const swx = 10 * Math.sin(TAU * t);
+    return [
+      ...bodyShapes({ dx: swx, feet: { liftL: 0, liftR: 0 }, shadow: 1 - Math.abs(swx) / 80 }),
+      ...faceShapes({ eye: 0.42, dx: swx, dy: 1, mouth: 'flat' }),
+    ];
+  } },
+
+  /* 1.6s one-shot: two quick hops, star bursts and falling confetti */
+  celebrate: { frames: 48, build(t) {
+    const jump = Math.abs(Math.sin(2 * Math.PI * t));
+    const dy = -36 * jump;
+    const shapes = [
+      ...bodyShapes({
+        sy: 1 + 0.12 * jump, sx: 1 - 0.08 * jump, dy,
+        feet: { liftL: 6 * jump, liftR: 6 * jump }, shadow: 1 - 0.5 * jump,
+      }),
+      ...faceShapes({ eye: 1, dy, mouth: 'open' }),
+      ...plus(96, 66, 9 * jump, 3.2, rgba(C.gold, jump)).flat(),
+      ...plus(226, 58, 8 * jump, 3, rgba(C.gold, 0.85 * jump)).flat(),
+      ...plus(160, 36, 6.5 * jump, 2.6, rgba(C.gold, 0.8 * jump)).flat(),
+    ];
+    const conf = [hex('#ff9db4'), hex('#7fd0ff'), C.gold, hex('#9fe6b2')];
+    for (let i = 0; i < 4; i++) {
+      const ang = (i * Math.PI) / 2 + t * 2.2;
+      const r = 16 + t * 58;
+      shapes.push(ellipse(160 + Math.cos(ang) * r, 84 + Math.sin(ang) * r * 0.55, 2.8, 2.8, () => rgba(conf[i], Math.max(0, 1 - t * 1.1))));
+    }
+    return shapes;
+  } },
+
+  /* 1.6s one-shot: decaying shake, dimmed body, worried eyes, sweat drop */
+  error: { frames: 48, build(t) {
+    const shake = t < 0.5 ? Math.sin(t * TAU * 6) * 4 * (1 - t * 2) : 0;
+    const dim = (x, y) => {
+      const c = C.bodyGrad(x, y);
+      return [Math.round(c[0] * 0.72), Math.round(c[1] * 0.7), Math.round(c[2] * 0.8), 255];
+    };
+    return [
+      ...bodyShapes({ dx: shake, sy: 0.97, dy: 2, feet: { liftL: 0, liftR: 0 }, shadow: 0.9, fill: dim }),
+      ...faceShapes({ eye: 0.45, dx: shake, dy: 2, mouth: 'o' }),
+      ellipse(216 + shake, 58 + 7 * t, 4.6, 6.4, () => rgba(hex('#7fd0ff'), Math.max(0, 1 - t * 1.2))),
+    ];
   } },
 };
 
