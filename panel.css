@@ -72,3 +72,14 @@
 .dpet-info { gap: 4px; font-size: 12px; color: var(--ink-faint); border-style: dashed; }
 .dpet-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dpet-empty { padding: 40px 16px; text-align: center; font-size: 13px; color: var(--ink-faint); }
+
+/* --- custom API engine form --------------------------------------------------- */
+.dpet-api-opts { flex-direction: column; align-items: stretch; gap: 8px; }
+.dpet-api-openai, .dpet-api-custom { flex-direction: column; align-items: stretch; gap: 8px; }
+.dpet-stack { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink); }
+.dpet-stack textarea.input {
+  font: 11px/1.5 var(--font-mono, monospace);
+  resize: vertical;
+  min-height: 40px;
+}
+.dpet-api-hint { font-size: 11px; color: var(--ink-dim); line-height: 1.5; }

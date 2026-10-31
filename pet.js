@@ -354,6 +354,9 @@
   let bubbleTimer = 0;
   let bubbleScrollRaf = 0;
   let activeAudio = null;
+  // bumped by stopVoice(): every queued-voice loop captures the value at
+  // start and dies on mismatch, so a new trigger replaces the speech in play
+  let voiceSeq = 0;
 
   function applyMargin() {
     marginH = prefs.margin || 0;
@@ -361,6 +364,7 @@
   }
 
   function stopVoice() {
+    voiceSeq++;
     if (activeAudio) {
       try {
         activeAudio.pause();
@@ -385,31 +389,49 @@
     } catch { /* no voice device: bubble only */ }
   };
 
-  const speak = (text, audioUrl, onAudioEnd) => {
+  /* Long speech arrives as segments (split on punctuation backend-side) and
+     is played back to back. `segs` is null for the plain system voice, or a
+     segment failing mid-queue hands its unspoken tail to the system voice —
+     the queue is then abandoned so the two engines never overlap. */
+  const speak = (text, segs, onAllEnd, onSegmentEnd) => {
     if (!prefs.voiceOn) return;
     stopVoice();
 
-    if (audioUrl) {
-      try {
-        const audio = new Audio(audioUrl);
-        activeAudio = audio;
-        audio.onended = () => {
-          if (activeAudio === audio) activeAudio = null;
-          if (onAudioEnd) onAudioEnd();
-        };
-        audio.onerror = () => {
-          if (activeAudio === audio) activeAudio = null;
-          fallbackSpeak(text);
-        };
-        audio.play().catch(() => fallbackSpeak(text));
-        return;
-      } catch {
-        fallbackSpeak(text);
-        return;
-      }
+    if (!Array.isArray(segs) || segs.length === 0) {
+      fallbackSpeak(text);
+      return;
     }
 
-    fallbackSpeak(text);
+    const mySeq = voiceSeq;
+    const failRemaining = fromIdx => {
+      voiceSeq++; // retire our own queue before switching engines
+      const rest = segs.slice(fromIdx).map(s => s.text || '').join(' ');
+      fallbackSpeak(rest.trim() || text);
+    };
+    const playAt = i => {
+      if (mySeq !== voiceSeq) return; // a newer voice took over
+      if (i >= segs.length) {
+        if (onAllEnd) onAllEnd();
+        return;
+      }
+      const seg = segs[i];
+      let audio;
+      try { audio = new Audio(seg.audioUrl); } catch { failRemaining(i); return; }
+      activeAudio = audio;
+      audio.onended = () => {
+        if (activeAudio === audio) activeAudio = null;
+        if (mySeq !== voiceSeq) return;
+        if (onSegmentEnd) onSegmentEnd(seg, i);
+        playAt(i + 1);
+      };
+      const fail = () => {
+        if (activeAudio === audio) activeAudio = null;
+        if (mySeq === voiceSeq) failRemaining(i);
+      };
+      audio.onerror = fail;
+      audio.play().catch(fail);
+    };
+    playAt(0);
   };
 
   /* Long texts are clipped to the zone height and reveal themselves by
@@ -442,8 +464,13 @@
     stopVoice();
   }
 
-  function showBubble(text, audioUrl, force = false) {
+  function showBubble(text, voice, force = false) {
     if ((!prefs.bubbleOn && !force) || !text || dragging) return;
+    // `voice` is a segment queue, a legacy single audioUrl, or nothing
+    const segs = Array.isArray(voice)
+      ? voice.filter(s => s && s.audioUrl)
+      : (voice ? [{ audioUrl: voice, text }] : null);
+    const voicePlaying = !!(segs && segs.length && prefs.voiceOn);
     stopBubbleScroll();
     stopVoice();
     bubbleText.textContent = text;
@@ -456,6 +483,13 @@
     // scroll (lead → scroll → tail) paced like reading it through
     const perChar = prefs.lang === 'en' ? 70 : 150;
     let holdMs = Math.max(2600, text.length * perChar);
+    // real speech outruns the per-char estimate — the bubble must outlive
+    // the whole queue or its timer guns the voice down mid-sentence
+    const voiceDurMs = voicePlaying
+      ? Math.round(segs.reduce((sum, s) => sum + (Number(s.duration) || 0), 0) * 1000)
+      : 0;
+    if (voiceDurMs > 0) holdMs = Math.max(holdMs, voiceDurMs + 2000);
+    const holdCap = voicePlaying ? 180000 : 60000;
     const overflow = bubbleText.scrollHeight - bubbleText.clientHeight;
     if (overflow > 4) {
       const cs = getComputedStyle(bubble);
@@ -463,20 +497,29 @@
       const charW = (parseFloat(cs.fontSize) || 13) * (prefs.lang === 'en' ? .56 : 1);
       const charsPerLine = Math.max(6, bubbleText.clientWidth / charW);
       // a speaking voice reads slower than silent reading — follow it
-      const scrollPerChar = audioUrl && prefs.voiceOn ? 220 : perChar;
+      const scrollPerChar = voicePlaying ? 220 : perChar;
       const lead = 1400, tail = 1600;
       let scrollMs = (overflow / lineH) * charsPerLine * scrollPerChar;
-      holdMs = Math.min(60000, Math.max(holdMs, lead + scrollMs + tail));
+      holdMs = Math.min(holdCap, Math.max(holdMs, lead + scrollMs + tail));
       scrollMs = Math.min(scrollMs, Math.max(600, holdMs - lead - tail));
       startBubbleScroll(overflow, lead, scrollMs);
     }
 
-    if (audioUrl && prefs.voiceOn) {
-      const maxTimer = setTimeout(hideBubble, Math.max(15000, holdMs + 8000));
-      speak(text, audioUrl, () => {
+    if (voicePlaying) {
+      // stall guard: sized to the whole queue, refreshed on each segment end
+      // against the segments still unplayed — only a genuinely stuck audio
+      // ever hides the bubble mid-speech
+      let maxTimer = setTimeout(hideBubble, Math.max(15000, holdMs + 8000));
+      const rearmGuard = (_seg, i) => {
+        clearTimeout(maxTimer);
+        let restMs = 0;
+        for (let j = i + 1; j < segs.length; j++) restMs += Number(segs[j].duration) || 0;
+        maxTimer = setTimeout(hideBubble, Math.max(15000, Math.round(restMs * 1000) + 8000));
+      };
+      speak(text, segs, () => {
         clearTimeout(maxTimer);
         bubbleTimer = setTimeout(hideBubble, 1200);
-      });
+      }, rearmGuard);
     } else {
       bubbleTimer = setTimeout(hideBubble, Math.min(60000, holdMs));
       if (prefs.voiceOn) speak(text, null);
@@ -593,7 +636,8 @@
     if (p.bubbleOn === false) hideBubble();
     if (p.voiceOn === false) stopVoice();
   });
-  window.pet.onBubble(({ text, audioUrl, force } = {}) => showBubble(text, audioUrl, !!force));
+  window.pet.onBubble(({ text, audioUrl, segments, force } = {}) =>
+    showBubble(text, Array.isArray(segments) && segments.length ? segments : audioUrl, !!force));
   window.pet.onPlay(({ anim, once, playbackId }) => {
     if (!motion) return;
     stopLoops();

@@ -84,6 +84,7 @@
                 <span class="dpet-row-label">${t('语音引擎', 'Engine')}</span>
                 <select class="dpet-voice-engine input small">
                   <option value="edge-tts">${t('Edge 神经网络语音 (高清)', 'Edge Neural TTS (HD)')}</option>
+                  <option value="api">${t('自定义 API (自有接口)', 'Custom API (own endpoint)')}</option>
                   <option value="system">${t('系统本地语音', 'System local voice')}</option>
                 </select>
               </label>
@@ -98,6 +99,57 @@
                   <input class="dpet-voice-pitch" type="range" min="0" max="40" step="5" />
                   <b class="dpet-voice-pitch-val"></b>
                 </label>
+              </div>
+              <div class="dpet-api-opts" style="display:none;">
+                <label class="dpet-row">
+                  <span class="dpet-row-label">${t('接口模式', 'Provider')}</span>
+                  <select class="dpet-api-provider input small">
+                    <option value="openai">${t('OpenAI 兼容 (/audio/speech)', 'OpenAI-compatible (/audio/speech)')}</option>
+                    <option value="custom">${t('自定义 HTTP 请求', 'Custom HTTP request')}</option>
+                  </select>
+                </label>
+                <div class="dpet-api-openai">
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">Base URL</span>
+                    <input class="dpet-api-base input small" spellcheck="false" placeholder="https://api.openai.com/v1" />
+                  </label>
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">API Key</span>
+                    <input class="dpet-api-key input small" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" />
+                  </label>
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">${t('模型', 'Model')}</span>
+                    <input class="dpet-api-model input small" spellcheck="false" placeholder="tts-1 / fishaudio/fish-speech-1.5" />
+                  </label>
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">${t('音色', 'Voice')}</span>
+                    <input class="dpet-api-voice input small" spellcheck="false" placeholder="${t('alloy（留空用接口默认）', 'alloy (blank = provider default)')}" />
+                  </label>
+                  <div class="dpet-api-hint">${t('OpenAI / 硅基流动 / new-api 中转等兼容接口均可；语速滑块会映射为 speed。', 'Works with OpenAI, SiliconFlow, new-api proxies and other compatible endpoints; the speed slider maps to speed.')}</div>
+                </div>
+                <div class="dpet-api-custom" style="display:none;">
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">${t('方法', 'Method')}</span>
+                    <select class="dpet-api-method input small">
+                      <option value="POST">POST</option>
+                      <option value="GET">GET</option>
+                      <option value="PUT">PUT</option>
+                    </select>
+                  </label>
+                  <label class="dpet-row">
+                    <span class="dpet-row-label">URL</span>
+                    <input class="dpet-api-url input small" spellcheck="false" placeholder="https://host/tts?text={text_url}" />
+                  </label>
+                  <label class="dpet-stack">
+                    <span class="dpet-row-label">${t('请求头 JSON', 'Headers JSON')}</span>
+                    <textarea class="dpet-api-headers input small" rows="2" spellcheck="false" placeholder='{"Authorization":"Bearer sk-…"}'></textarea>
+                  </label>
+                  <label class="dpet-stack">
+                    <span class="dpet-row-label">${t('请求体模板', 'Body template')}</span>
+                    <textarea class="dpet-api-body input small" rows="3" spellcheck="false" placeholder='{"input":"{text_json}","model":"tts-1"}'></textarea>
+                  </label>
+                  <div class="dpet-api-hint">${t('占位符：{text_json}=JSON 转义文本，{text_url}=URL 编码文本；接口返回音频二进制即可，长文自动分段排队播报。', 'Placeholders: {text_json} = JSON-escaped text, {text_url} = URL-encoded text; any endpoint returning audio bytes works. Long texts are spoken as a segment queue.')}</div>
+                </div>
               </div>
               <label class="dpet-row">
                 <span class="dpet-row-label">${t('语速调节', 'Speed')}</span>
@@ -146,6 +198,12 @@
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
         systemHint: $('.dpet-system-hint'),
         edgeOpts: $('.dpet-edge-opts'), voiceSelect: $('.dpet-voice-select'),
+        apiOpts: $('.dpet-api-opts'), apiProvider: $('.dpet-api-provider'),
+        apiOpenai: $('.dpet-api-openai'), apiCustom: $('.dpet-api-custom'),
+        apiBase: $('.dpet-api-base'), apiKey: $('.dpet-api-key'),
+        apiModel: $('.dpet-api-model'), apiVoice: $('.dpet-api-voice'),
+        apiMethod: $('.dpet-api-method'), apiUrl: $('.dpet-api-url'),
+        apiHeaders: $('.dpet-api-headers'), apiBody: $('.dpet-api-body'),
         voiceRate: $('.dpet-voice-rate'), voiceRateVal: $('.dpet-voice-rate-val'),
         voicePitch: $('.dpet-voice-pitch'), voicePitchVal: $('.dpet-voice-pitch-val'),
         voicePreview: $('.dpet-voice-preview'), previewStatus: $('.dpet-preview-status'),
@@ -155,6 +213,41 @@
 
       const call = (method, args) => window.host.pluginCall('desktop-pet', method, args);
       let sizeCommitted = null;
+
+      /* --- voice engine switching (edge / custom api / system) ----------------- */
+
+      const applyProviderUI = () => {
+        const isCustom = els.apiProvider.value === 'custom';
+        els.apiOpenai.style.display = isCustom ? 'none' : 'flex';
+        els.apiCustom.style.display = isCustom ? 'flex' : 'none';
+      };
+      const applyEngineUI = () => {
+        const engine = els.voiceEngine.value;
+        const isSystem = engine === 'system';
+        const isApi = engine === 'api';
+        els.edgeOpts.style.display = (isSystem || isApi) ? 'none' : 'flex';
+        if (els.systemHint) els.systemHint.style.display = isSystem ? 'block' : 'none';
+        els.apiOpts.style.display = isApi ? 'flex' : 'none';
+        applyProviderUI();
+      };
+      const collectApiConfig = () => ({
+        provider: els.apiProvider.value,
+        baseUrl: els.apiBase.value.trim(),
+        apiKey: els.apiKey.value.trim(),
+        model: els.apiModel.value.trim(),
+        voice: els.apiVoice.value.trim(),
+        custom: {
+          method: els.apiMethod.value,
+          url: els.apiUrl.value.trim(),
+          headers: els.apiHeaders.value,
+          body: els.apiBody.value,
+        },
+      });
+      let apiSaveTimer = 0;
+      const saveApiConfigSoon = () => {
+        clearTimeout(apiSaveTimer);
+        apiSaveTimer = setTimeout(() => { call('setPrefs', { apiConfig: collectApiConfig() }); }, 500);
+      };
 
       const render = () => {
         if (!state) return;
@@ -204,9 +297,22 @@
 
         els.voiceOpts.style.display = prefs.voiceOn ? 'flex' : 'none';
         els.voiceEngine.value = prefs.voiceEngine || 'edge-tts';
-        const isSystem = (prefs.voiceEngine === 'system');
-        els.edgeOpts.style.display = isSystem ? 'none' : 'flex';
-        if (els.systemHint) els.systemHint.style.display = isSystem ? 'block' : 'none';
+
+        // custom-API form: don't stomp fields the user is typing into
+        const api = prefs.apiConfig || {};
+        if (els.apiProvider.value !== (api.provider || 'openai')) els.apiProvider.value = api.provider || 'openai';
+        const setIfIdle = (el, v) => { if (document.activeElement !== el && el.value !== v) el.value = v; };
+        setIfIdle(els.apiBase, api.baseUrl || '');
+        setIfIdle(els.apiKey, api.apiKey || '');
+        setIfIdle(els.apiModel, api.model || '');
+        setIfIdle(els.apiVoice, api.voice || '');
+        if (api.custom) {
+          if (els.apiMethod.value !== (api.custom.method || 'POST')) els.apiMethod.value = api.custom.method || 'POST';
+          setIfIdle(els.apiUrl, api.custom.url || '');
+          setIfIdle(els.apiHeaders, api.custom.headers || '{}');
+          setIfIdle(els.apiBody, api.custom.body || '');
+        }
+        applyEngineUI();
         els.voicePreview.style.display = 'inline-flex';
 
         if (state.voices && state.voices.length) {
@@ -274,10 +380,12 @@
       let previewAudio = null;
       let previewTimer = null;
       let previewState = 'idle'; // 'idle' | 'loading' | 'playing' | 'failed'
+      let previewSeq = 0; // a new preview retires the segment queue in play
 
       function stopPreview() {
         clearTimeout(previewTimer);
         previewTimer = null;
+        previewSeq++;
         if (previewAudio) {
           try { previewAudio.pause(); previewAudio.currentTime = 0; } catch { /* ignore */ }
           previewAudio = null;
@@ -319,11 +427,18 @@
         setPreviewState('idle');
         els.previewStatus.textContent = '';
         call('setPrefs', { voiceEngine: els.voiceEngine.value });
-        const isSystem = (els.voiceEngine.value === 'system');
-        els.edgeOpts.style.display = isSystem ? 'none' : 'flex';
-        if (els.systemHint) els.systemHint.style.display = isSystem ? 'block' : 'none';
-        els.voicePreview.style.display = 'inline-flex';
+        applyEngineUI();
       });
+      els.apiProvider.addEventListener('change', () => {
+        stopPreview();
+        applyProviderUI();
+        saveApiConfigSoon();
+      });
+      for (const el of [els.apiBase, els.apiKey, els.apiModel, els.apiVoice, els.apiUrl, els.apiHeaders, els.apiBody]) {
+        el.addEventListener('change', saveApiConfigSoon);
+        el.addEventListener('input', saveApiConfigSoon);
+      }
+      els.apiMethod.addEventListener('change', saveApiConfigSoon);
       els.voiceSelect.addEventListener('change', () => {
         stopPreview();
         setPreviewState('idle');
@@ -402,17 +517,21 @@
           return;
         }
 
-        // Edge 神经网络语音试听
+        // Edge 神经网络 / 自定义 API 语音试听
+        const isApi = engine === 'api';
         setPreviewState('loading', t('正在合成…', 'Synthesizing…'));
         previewTimer = setTimeout(() => {
           if (previewState === 'loading') {
             stopPreview();
             setPreviewState('failed', t('⚠ 合成超时，点击重试', '⚠ Synthesis timeout, click to retry'));
           }
-        }, 8000);
+        }, isApi ? 35000 : 8000);
 
         try {
+          if (isApi) await call('setPrefs', { apiConfig: collectApiConfig() }); // test what the form says
           const res = await call('previewVoice', {
+            engine,
+            ...(isApi ? { apiConfig: collectApiConfig() } : {}),
             voice: els.voiceSelect.value,
             rate: Number(els.voiceRate.value),
             pitch: Number(els.voicePitch.value),
@@ -427,21 +546,31 @@
           }
 
           setPreviewState('playing', t('正在播放…', 'Playing…'));
-          previewAudio = new Audio(d.audioUrl);
-          previewAudio.onended = () => {
+          // long previews come back as segments — play them back to back
+          const segs = (Array.isArray(d.segments) && d.segments.length)
+            ? d.segments.filter(s => s && s.audioUrl)
+            : [{ audioUrl: d.audioUrl }];
+          const mySeq = previewSeq;
+          const finish = () => {
             previewAudio = null;
             setPreviewState('idle');
             els.previewStatus.textContent = t('✓ 试听完成', '✓ Finished');
             setTimeout(() => { if (els.previewStatus.textContent.includes('✓')) els.previewStatus.textContent = ''; }, 2500);
           };
-          previewAudio.onerror = () => {
+          const failPreview = () => {
+            if (mySeq !== previewSeq) return; // superseded, not a real failure
             previewAudio = null;
             setPreviewState('failed', t('⚠ 播放失败，点击重试', '⚠ Play failed, click to retry'));
           };
-          previewAudio.play().catch(() => {
-            previewAudio = null;
-            setPreviewState('failed', t('⚠ 播放失败，点击重试', '⚠ Play failed, click to retry'));
-          });
+          const playAt = i => {
+            if (mySeq !== previewSeq) return; // superseded by a newer preview
+            if (i >= segs.length) { finish(); return; }
+            previewAudio = new Audio(segs[i].audioUrl);
+            previewAudio.onended = () => { if (mySeq === previewSeq) playAt(i + 1); };
+            previewAudio.onerror = failPreview;
+            previewAudio.play().catch(failPreview);
+          };
+          playAt(0);
         } catch (err) {
           clearTimeout(previewTimer);
           setPreviewState('failed', t(`⚠ 异常: ${err.message || ''}，点击重试`, `⚠ Error: ${err.message || ''}, click to retry`));

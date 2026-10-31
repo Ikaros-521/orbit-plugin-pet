@@ -28,8 +28,80 @@ const PRESET_VOICES = [
 const DEFAULT_VOICE_ZH = 'zh-CN-XiaoyiNeural';
 const DEFAULT_VOICE_EN = 'en-US-AnaNeural';
 const MAX_CACHE_ITEMS = 20; // 严格限制缓存数量，占用极小内存 (< 400KB)
+const SEGMENT_MAX_CHARS = 100; // per-segment cap for queued synthesis
 
 /* --- Helpers -------------------------------------------------------------- */
+
+/* Long texts must be spoken as a queue of short segments: one oversized
+   request is slow to synthesize (trips the timeout) and comes back cut
+   short. Sentences are split at strong enders (a '.' only at a word
+   boundary, so decimals survive), greedily merged up to maxLen, and
+   punctuation-free marathons are force-split at commas, then anywhere. */
+
+const SENTENCE_ENDERS = '。！？!?…；;';
+
+function splitSentences(raw) {
+  const res = [];
+  let buf = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    buf += ch;
+    const dotBoundary = ch === '.' && (i + 1 >= raw.length || raw[i + 1] === ' ');
+    if (SENTENCE_ENDERS.includes(ch) || dotBoundary) {
+      res.push(buf);
+      buf = '';
+    }
+  }
+  if (buf) res.push(buf);
+  return res;
+}
+
+function hardSplit(sentence, maxLen) {
+  const parts = [];
+  let buf = '';
+  for (const clause of sentence.match(/[^，、,:：]*[，、,:：]+|[^，、,:：]+/g) || []) {
+    let piece = clause;
+    if (buf && buf.length + piece.length > maxLen) {
+      parts.push(buf);
+      buf = '';
+    }
+    while (buf.length + piece.length > maxLen) { // no separator in sight
+      if (buf) { parts.push(buf); buf = ''; }
+      parts.push(piece.slice(0, maxLen));
+      piece = piece.slice(maxLen);
+    }
+    buf += piece;
+  }
+  if (buf) parts.push(buf);
+  return parts;
+}
+
+function splitSegments(text, maxLen = SEGMENT_MAX_CHARS) {
+  const cap = Math.max(10, maxLen | 0);
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [];
+  const segments = [];
+  let buf = '';
+  const flush = () => {
+    const s = buf.trim();
+    if (s) segments.push(s);
+    buf = '';
+  };
+  for (const sentence of splitSentences(raw)) {
+    if (sentence.length > cap) {
+      flush();
+      for (const part of hardSplit(sentence, cap)) {
+        const p = part.trim();
+        if (p) segments.push(p);
+      }
+      continue;
+    }
+    if (buf && buf.length + sentence.length > cap) flush();
+    buf += sentence;
+  }
+  flush();
+  return segments;
+}
 
 function formatRate(rate) {
   if (typeof rate === 'number') {
@@ -61,12 +133,27 @@ function normalizeKey(text, voice, rate, pitch) {
 
 /* --- Service Class -------------------------------------------------------- */
 
+/* The service refuses a voice reading text in another script (it returns
+   NO_AUDIO for e.g. en-US voices handed Chinese) — a hard, deterministic
+   failure users hit by previewing an English voice against Chinese chatter.
+   Correct it up front instead of failing. CJK-free text is fine in any
+   voice (zh voices read English), so only one direction needs the fix. */
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const TRANSIENT_RE = /timed?\s?out|timeout|handshake|econn|socket|429|503|temporarily|network|unable to synthesize/i;
+
+function voiceMismatch(text, voice) {
+  return CJK_RE.test(text) && !/^(zh|ja|ko)-/i.test(String(voice || ''));
+}
+
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
 class EdgeTTSService {
   constructor(options = {}) {
     this.maxCache = options.maxCache || MAX_CACHE_ITEMS;
     this.defaultVoiceZh = options.defaultVoiceZh || DEFAULT_VOICE_ZH;
     this.defaultVoiceEn = options.defaultVoiceEn || DEFAULT_VOICE_EN;
     this.timeoutMs = options.timeoutMs || 8000;
+    this.segmentMaxChars = options.segmentMaxChars || SEGMENT_MAX_CHARS;
     // LRU Map: stores key -> { audioUrl, duration, at }
     this.cache = new Map();
   }
@@ -111,7 +198,50 @@ class EdgeTTSService {
   }
 
   /**
+   * One raw synthesis attempt (own EdgeTTS instance: a failed socket must
+   * not be reused). Never retries by itself.
+   */
+  async attemptOnce(rawText, selectedVoice, formattedRate, formattedPitch, timeout) {
+    const tts = new EdgeTTS({ timeout });
+    let timeoutTimer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        reject(new Error(`TTS synthesis timed out after ${timeout}ms`));
+      }, timeout);
+    });
+    try {
+      const synthPromise = tts.generate(rawText, selectedVoice, {
+        rate: formattedRate,
+        pitch: formattedPitch,
+      });
+      const res = await Promise.race([synthPromise, timeoutPromise]);
+      clearTimeout(timeoutTimer);
+      if (!res || !res.audio || res.audio.length === 0) {
+        return { ok: false, error: 'Received empty audio', fallback: true };
+      }
+      const base64 = res.audio.toString('base64');
+      return {
+        ok: true,
+        audioUrl: `data:audio/mp3;base64,${base64}`,
+        duration: typeof res.duration === 'number' ? res.duration : 0,
+      };
+    } catch (err) {
+      clearTimeout(timeoutTimer);
+      return {
+        ok: false,
+        error: err && err.message ? err.message : String(err),
+        fallback: true,
+      };
+    }
+  }
+
+  /**
    * Synthesize text into an audio Data URL (MP3 base64).
+   *
+   * A voice that cannot read the text's script is silently corrected to the
+   * zh default (the service hard-fails that combination with NO_AUDIO), and
+   * one transient-looking failure (timeout / handshake / 429-ish) is retried
+   * once with a short backoff.
    *
    * @param {Object} params
    * @param {string} params.text - The sentence to read
@@ -128,10 +258,12 @@ class EdgeTTSService {
       return { ok: false, error: 'Text is empty', fallback: false };
     }
 
-    const selectedVoice = voice || this.getDefaultVoice(lang);
+    const adjusted = voiceMismatch(rawText, voice || this.getDefaultVoice(lang));
+    const selectedVoice = adjusted ? this.getDefaultVoice('zh') : (voice || this.getDefaultVoice(lang));
     const formattedRate = formatRate(rate);
     const formattedPitch = formatPitch(pitch);
     const key = normalizeKey(rawText, selectedVoice, formattedRate, formattedPitch);
+    const tags = adjusted ? { voiceAdjusted: true } : {};
 
     // 1. Check memory LRU cache
     const cached = this.getFromCache(key);
@@ -144,60 +276,80 @@ class EdgeTTSService {
         format: 'mp3',
         text: rawText,
         voice: selectedVoice,
+        ...tags,
       };
     }
 
-    // 2. Perform synthesis with EdgeTTS
+    // 2. Synthesize (one transient retry), then 3. cache
     const timeout = timeoutMs || this.timeoutMs;
-    const tts = new EdgeTTS({ timeout });
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      res = await this.attemptOnce(rawText, selectedVoice, formattedRate, formattedPitch, timeout);
+      if (res.ok || attempt >= 1 || !TRANSIENT_RE.test(res.error || '')) break;
+      await delay(400 + Math.random() * 300);
+    }
+    if (!res.ok) {
+      return { ...res, text: rawText, voice: selectedVoice, ...tags };
+    }
 
-    let timeoutTimer = null;
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutTimer = setTimeout(() => {
-        reject(new Error(`TTS synthesis timed out after ${timeout}ms`));
-      }, timeout);
-    });
+    this.putInCache(key, { audioUrl: res.audioUrl, duration: res.duration, at: Date.now() });
+    return {
+      ok: true,
+      cached: false,
+      audioUrl: res.audioUrl,
+      duration: res.duration,
+      format: 'mp3',
+      text: rawText,
+      voice: selectedVoice,
+      ...tags,
+    };
+  }
 
-    try {
-      const synthPromise = tts.generate(rawText, selectedVoice, {
-        rate: formattedRate,
-        pitch: formattedPitch,
-      });
-
-      const res = await Promise.race([synthPromise, timeoutPromise]);
-      clearTimeout(timeoutTimer);
-
-      if (!res || !res.audio || res.audio.length === 0) {
-        return { ok: false, error: 'Received empty audio', fallback: true, text: rawText };
-      }
-
-      const base64 = res.audio.toString('base64');
-      const audioUrl = `data:audio/mp3;base64,${base64}`;
-      const duration = typeof res.duration === 'number' ? res.duration : 0;
-
-      // 3. Store in LRU cache
-      this.putInCache(key, { audioUrl, duration, at: Date.now() });
-
+  /**
+   * Synthesize long text as an ordered queue of short segments.
+   *
+   * Text is split on sentence punctuation (force-split when a stretch has
+   * none), each segment synthesized independently (own timeout + cache
+   * entry), so a long speech neither times out nor comes back truncated.
+   * Callers get `segments: [{ text, audioUrl, duration }]` to play back to
+   * back; `audioUrl` stays the first segment for single-shot consumers.
+   *
+   * @param {Object} params - Same shape as synthesize()
+   * @returns {Promise<Object>} `{ ok, segments, audioUrl, duration, ... }`
+   */
+  async synthesizeQueued(params = {}) {
+    const segments = splitSegments(params.text, this.segmentMaxChars);
+    if (segments.length === 0) {
+      return { ok: false, error: 'Text is empty', fallback: false };
+    }
+    if (segments.length === 1) {
+      const res = await this.synthesize({ ...params, text: segments[0] });
+      if (!res || !res.ok) return res;
       return {
-        ok: true,
-        cached: false,
-        audioUrl,
-        duration,
-        format: 'mp3',
-        text: rawText,
-        voice: selectedVoice,
+        ...res,
+        segments: [{ text: res.text, audioUrl: res.audioUrl, duration: res.duration }],
       };
-    } catch (err) {
-      clearTimeout(timeoutTimer);
-      const msg = err && err.message ? err.message : String(err);
+    }
+    const results = await Promise.all(segments.map(text => this.synthesize({ ...params, text })));
+    const failed = results.find(r => !r || !r.ok);
+    if (failed) {
       return {
         ok: false,
-        error: msg,
-        fallback: true, // indicates caller can fallback to speechSynthesis
-        text: rawText,
-        voice: selectedVoice,
+        error: (failed && failed.error) || 'segment synthesis failed',
+        fallback: true,
+        text: String(params.text || '').trim(),
       };
     }
+    return {
+      ok: true,
+      cached: results.every(r => r.cached),
+      segments: results.map(r => ({ text: r.text, audioUrl: r.audioUrl, duration: r.duration })),
+      audioUrl: results[0].audioUrl,
+      duration: results.reduce((sum, r) => sum + (r.duration || 0), 0),
+      format: 'mp3',
+      text: String(params.text || '').trim(),
+      voice: results[0].voice,
+    };
   }
 }
 
@@ -210,6 +362,8 @@ module.exports = {
   DEFAULT_VOICE_ZH,
   DEFAULT_VOICE_EN,
   MAX_CACHE_ITEMS,
+  SEGMENT_MAX_CHARS,
+  splitSegments,
   formatRate,
   formatPitch,
 };

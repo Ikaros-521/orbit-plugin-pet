@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { createPseudoCtx } = require('./compat/pseudo-ctx');
 const { ttsService, PRESET_VOICES, DEFAULT_VOICE_ZH, DEFAULT_VOICE_EN } = require('./services/tts');
+const { apiTtsService, normalizeConfig: normalizeApiConfig } = require('./services/tts-api');
 
 const P = 'desktop-pet:'; // ipc channel namespace for the sprite window
 const TOPMOST_TICK_MS = 8000;
@@ -33,10 +34,11 @@ module.exports = {
       autoWalk: true,
       bubbleOn: true,
       voiceOn: false,
-      voiceEngine: 'edge-tts',             // 'edge-tts' | 'system'
+      voiceEngine: 'edge-tts',             // 'edge-tts' | 'system' | 'api'
       voice: DEFAULT_VOICE_ZH,             // 'zh-CN-XiaoyiNeural'
       voiceRate: 0,                        // speed offset: -30 ~ +30 (%)
       voicePitch: 0,                       // pitch offset: 0 ~ +40 (Hz)
+      apiConfig: null,                     // custom-API engine settings (services/tts-api)
       wfOn: true,          // react to workflow runs with state animations
       tasksOn: true,       // unchecked-todo badge mirrored from memo
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
@@ -45,6 +47,7 @@ module.exports = {
       y: null,
       ...ctx.data.get(),
     };
+    prefs.apiConfig = normalizeApiConfig(prefs.apiConfig); // survives old saves / foreign shapes
     const savePrefs = () => ctx.data.set({ ...prefs });
 
     /* ---- model library: drop folders in, packs come out -----------------------
@@ -540,6 +543,7 @@ module.exports = {
       size: prefs.size, autoWalk: prefs.autoWalk, bubbleOn: prefs.bubbleOn,
       voiceOn: prefs.voiceOn, voiceEngine: prefs.voiceEngine, voice: prefs.voice,
       voiceRate: prefs.voiceRate, voicePitch: prefs.voicePitch,
+      apiConfig: prefs.voiceEngine === 'api' ? prefs.apiConfig : undefined,
       wfOn: prefs.wfOn, tasksOn: prefs.tasksOn,
       lang: prefs.lang, margin: marginH(prefs.size),
     });
@@ -579,27 +583,45 @@ module.exports = {
       if (text === undefined && isLocked()) return { ok: false, error: 'locked' }; // self-chatter yields to a takeover
       const rt = petWin && !petWin.isDestroyed() && petWin.isVisible();
       if (!rt) return { ok: false, error: 'pet is hidden' };
-      const body = typeof text === 'string' && text.trim() ? text.trim().slice(0, 200) : pickQuip();
+      // cap keeps a runaway text bounded; the renderer speaks it in queued
+      // segments, so long reminders are still read out in full
+      const body = typeof text === 'string' && text.trim() ? text.trim().slice(0, 400) : pickQuip();
       const mySeq = ++quipSeq;
+      let ttsError = ''; // why a TTS engine fell back to the system voice
 
-      if (prefs.voiceOn && prefs.voiceEngine === 'edge-tts') {
+      if (prefs.voiceOn && (prefs.voiceEngine === 'edge-tts' || prefs.voiceEngine === 'api')) {
         try {
-          const ttsRes = await ttsService.synthesize({
-            text: body,
-            voice: prefs.voice,
-            rate: prefs.voiceRate,
-            pitch: prefs.voicePitch,
-            lang: prefs.lang || 'zh',
-          });
+          const ttsRes = prefs.voiceEngine === 'api'
+            ? await apiTtsService.synthesizeQueued({
+                text: body,
+                config: prefs.apiConfig,
+                rate: prefs.voiceRate,
+              })
+            : await ttsService.synthesizeQueued({
+                text: body,
+                voice: prefs.voice,
+                rate: prefs.voiceRate,
+                pitch: prefs.voicePitch,
+                lang: prefs.lang || 'zh',
+              });
           if (mySeq !== quipSeq) return { ok: true, dropped: true };
-          if (ttsRes && ttsRes.ok && ttsRes.audioUrl) {
-            send('bubble', { text: body, audioUrl: ttsRes.audioUrl, duration: ttsRes.duration, engine: 'edge-tts', force });
-            return { ok: true, text: body, audioUrl: ttsRes.audioUrl };
+          if (ttsRes && ttsRes.ok && Array.isArray(ttsRes.segments) && ttsRes.segments.length) {
+            send('bubble', {
+              text: body,
+              segments: ttsRes.segments,
+              duration: ttsRes.duration,
+              engine: prefs.voiceEngine,
+              force,
+            });
+            return { ok: true, text: body, audioUrl: ttsRes.audioUrl, segments: ttsRes.segments };
           }
+          if (mySeq !== quipSeq) return { ok: true, dropped: true };
+          ttsError = (ttsRes && ttsRes.error) || '';
         } catch { /* synthesize error, fallback below */ }
         if (mySeq === quipSeq) {
           send('bubble', { text: body, engine: 'system', fallback: true, force });
         }
+        return { ok: true, text: body, fallbackEngine: 'system', error: ttsError };
       } else {
         send('bubble', { text: body, engine: 'system', force });
       }
@@ -924,8 +946,9 @@ module.exports = {
         if (typeof args.autoWalk === 'boolean') prefs.autoWalk = args.autoWalk;
         if (typeof args.bubbleOn === 'boolean') prefs.bubbleOn = args.bubbleOn;
         if (typeof args.voiceOn === 'boolean') prefs.voiceOn = args.voiceOn;
-        if (args.voiceEngine === 'edge-tts' || args.voiceEngine === 'system') prefs.voiceEngine = args.voiceEngine;
+        if (args.voiceEngine === 'edge-tts' || args.voiceEngine === 'system' || args.voiceEngine === 'api') prefs.voiceEngine = args.voiceEngine;
         if (typeof args.voice === 'string' && args.voice.trim()) prefs.voice = args.voice.trim();
+        if (args.apiConfig && typeof args.apiConfig === 'object') prefs.apiConfig = normalizeApiConfig(args.apiConfig);
         if (typeof args.voiceRate === 'number' && Number.isFinite(args.voiceRate)) prefs.voiceRate = Math.max(-30, Math.min(50, Math.round(args.voiceRate)));
         if (typeof args.voicePitch === 'number' && Number.isFinite(args.voicePitch)) prefs.voicePitch = Math.max(0, Math.min(50, Math.round(args.voicePitch)));
         if (typeof args.wfOn === 'boolean') prefs.wfOn = args.wfOn;
@@ -1060,7 +1083,17 @@ module.exports = {
           ? 'Hello! I am your desktop pet, nice to meet you!'
           : '你好呀，我是小轨桌宠，今天也要开开心心哦！';
         const text = (typeof args.text === 'string' && args.text.trim()) ? args.text.trim() : sample;
-        return ttsService.synthesize({
+        if (engine === 'api') {
+          const cfg = (args.apiConfig && typeof args.apiConfig === 'object')
+            ? normalizeApiConfig(args.apiConfig)
+            : prefs.apiConfig;
+          return apiTtsService.synthesizeQueued({
+            text,
+            config: cfg,
+            rate: args.rate !== undefined ? args.rate : prefs.voiceRate,
+          });
+        }
+        return ttsService.synthesizeQueued({
           text,
           voice: args.voice || prefs.voice,
           rate: args.rate !== undefined ? args.rate : prefs.voiceRate,
