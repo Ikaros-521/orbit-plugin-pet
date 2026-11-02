@@ -81,17 +81,11 @@
     bubble.className = 'msg-bubble';
 
     if (msg.role === 'assistant') {
-      // If there's reasoning content, show expandable reasoning card
-      if (msg.reasoning) {
+      // If there's reasoning content, show compact expandable reasoning capsule
+      if (msg.reasoning && msg.reasoning.trim()) {
         const rCard = document.createElement('div');
         rCard.className = 'reasoning-card collapsed';
-        rCard.innerHTML = `
-          <div class="reasoning-header">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
-            <span>深度思考过程</span>
-          </div>
-          <div class="reasoning-body">${escapeHtml(msg.reasoning)}</div>
-        `;
+        rCard.innerHTML = `<div class="reasoning-header"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg><span>已深度思考 (点击展开)</span></div><div class="reasoning-body">${escapeHtml(msg.reasoning.trim())}</div>`;
         rCard.querySelector('.reasoning-header').addEventListener('click', () => {
           rCard.classList.toggle('collapsed');
           scrollToBottom(true);
@@ -155,13 +149,7 @@
     // Placeholder for reasoning
     const reasoningBox = document.createElement('div');
     reasoningBox.className = 'reasoning-card hidden';
-    reasoningBox.innerHTML = `
-      <div class="reasoning-header">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        <span>深度思考中…</span>
-      </div>
-      <div class="reasoning-body"></div>
-    `;
+    reasoningBox.innerHTML = `<div class="reasoning-header"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg><span>深度思考中…</span></div><div class="reasoning-body"></div>`;
     reasoningBox.querySelector('.reasoning-header').addEventListener('click', () => {
       reasoningBox.classList.toggle('collapsed');
       scrollToBottom(true);
@@ -182,6 +170,13 @@
 
   function updateStreamingContent(delta, fullContent) {
     if (!activeAssistantEl) createStreamingAssistantMessage();
+    // 当正文开始生成时，若思考卡片还在展开状态，自动收起为小胶囊，让正文成为主角！
+    const rBox = activeAssistantEl.reasoningBox;
+    if (rBox && !rBox.classList.contains('hidden') && !rBox.classList.contains('collapsed')) {
+      rBox.classList.add('collapsed');
+      const span = rBox.querySelector('.reasoning-header span');
+      if (span) span.textContent = '已深度思考 (点击展开)';
+    }
     activeContentText = fullContent !== undefined ? fullContent : (activeContentText + (delta || ''));
     const contentBox = activeAssistantEl.contentBox;
     contentBox.innerHTML = renderMarkdown(activeContentText) + '<span class="typing-cursor"></span>';
@@ -218,9 +213,14 @@
     }
 
     const rBox = activeAssistantEl.reasoningBox;
-    if (rBox && !rBox.classList.contains('hidden')) {
-      rBox.classList.add('collapsed');
-      rBox.querySelector('.reasoning-header span').textContent = '深度思考完成';
+    if (rBox) {
+      if (!activeReasoningText || !activeReasoningText.trim()) {
+        rBox.remove(); // 没有任何思考内容，彻底移除占位节点！
+      } else {
+        rBox.classList.add('collapsed');
+        const span = rBox.querySelector('.reasoning-header span');
+        if (span) span.textContent = '已深度思考 (点击展开)';
+      }
     }
 
     activeAssistantEl = null;

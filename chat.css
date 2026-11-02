@@ -220,12 +220,11 @@ html, body {
 
 .msg-bubble {
   max-width: 86%;
-  padding: 9px 13px;
+  padding: 8px 12px;
   border-radius: var(--radius-md);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.5;
   word-break: break-word;
-  white-space: pre-wrap;
   position: relative;
 }
 
@@ -234,6 +233,7 @@ html, body {
   border: 1px solid rgba(255, 171, 46, 0.35);
   color: #fff;
   border-top-right-radius: 3px;
+  white-space: pre-wrap; /* 仅用户纯文本保留换行 */
 }
 
 .msg-row.assistant .msg-bubble {
@@ -242,13 +242,17 @@ html, body {
   color: var(--ink-primary);
   border-top-left-radius: 3px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  white-space: normal; /* 助手消息结构化布局，不让标签空白字符占位 */
 }
 
 /* Markdown / formatting inside messages */
-.msg-bubble p {
-  margin-bottom: 8px;
+.msg-content {
+  line-height: 1.55;
 }
-.msg-bubble p:last-child {
+.msg-content p {
+  margin-bottom: 6px;
+}
+.msg-content p:last-child {
   margin-bottom: 0;
 }
 
@@ -281,37 +285,56 @@ html, body {
   padding: 0;
 }
 
-/* Reasoning block (DeepSeek / CoT style with high contrast) */
+/* Reasoning block: compact capsule when collapsed, clean panel when open */
 .reasoning-card {
-  margin-bottom: 8px;
-  background: rgba(14, 17, 24, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-left: 3px solid var(--amber);
+  margin: 0 0 6px 0;
   border-radius: var(--radius-sm);
+  background: rgba(14, 18, 26, 0.75);
+  border: 1px solid rgba(255, 171, 46, 0.25);
   overflow: hidden;
+  font-size: 11px;
+  transition: all 0.2s ease;
+}
+
+/* 折叠状态：精致紧凑的胶囊条，不霸占空间与宽度 */
+.reasoning-card.collapsed {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 171, 46, 0.08);
+  border: 1px solid rgba(255, 171, 46, 0.25);
+  border-radius: 12px;
+  margin: 0 0 6px 0;
+}
+
+.reasoning-card.collapsed:hover {
+  background: rgba(255, 171, 46, 0.15);
+  border-color: rgba(255, 171, 46, 0.45);
 }
 
 .reasoning-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 11.5px;
+  gap: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--amber);
   cursor: pointer;
   user-select: none;
-  background: rgba(255, 171, 46, 0.09);
-  transition: background 0.15s ease, filter 0.15s ease;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
 }
 
-.reasoning-header:hover {
-  background: rgba(255, 171, 46, 0.16);
+.reasoning-card:not(.collapsed) .reasoning-header {
+  background: rgba(255, 171, 46, 0.06);
 }
 
 .reasoning-header svg {
+  width: 9px;
+  height: 9px;
   transition: transform 0.2s ease;
   stroke: var(--amber);
+  flex-shrink: 0;
 }
 
 .reasoning-card.collapsed .reasoning-header svg {
@@ -319,14 +342,14 @@ html, body {
 }
 
 .reasoning-body {
-  padding: 8px 11px;
-  font-size: 12px;
-  color: #dbe2ea !important; /* 清晰明亮的高对比度浅灰白，彻底告别看不见的问题 */
-  line-height: 1.55;
-  font-style: normal; /* 移除 italic，杜绝中文字体发虚发暗 */
-  background: rgba(8, 10, 14, 0.92);
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: #cdd5df !important;
+  line-height: 1.5;
+  font-style: normal;
+  background: rgba(8, 10, 14, 0.85);
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  max-height: 200px;
+  max-height: 160px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
