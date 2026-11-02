@@ -546,9 +546,28 @@
     chatBtnEl.addEventListener('click', () => window.pet.openChat());
   }
 
-  /* --- click-through -------------------------------------------------------- */
+  /* --- click-through & hover detection --------------------------------------- */
 
   let ignoring = null;
+  let isHovered = false;
+  let hoverLeaveTimer = 0;
+
+  function updateHoverState(hover) {
+    if (hover) {
+      clearTimeout(hoverLeaveTimer);
+      if (!isHovered) {
+        isHovered = true;
+        document.body.classList.add('hovered');
+      }
+    } else {
+      clearTimeout(hoverLeaveTimer);
+      hoverLeaveTimer = setTimeout(() => {
+        isHovered = false;
+        document.body.classList.remove('hovered');
+      }, 250);
+    }
+  }
+
   const inRect = (el, x, y) => {
     const r = el.getBoundingClientRect();
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -556,15 +575,22 @@
   function overBody(x, y) {
     if (bubbleVisible && inRect(bubble, x, y)) return true;
     if (!tasksEl.classList.contains('hidden') && inRect(tasksEl, x, y)) return true;
-    if (chatBtnEl && inRect(chatBtnEl, x, y)) return true;
+    if (isHovered && chatBtnEl && inRect(chatBtnEl, x, y)) return true;
     return y >= marginH;
   }
   window.addEventListener('mousemove', e => {
     if (dragging) return;
-    const wantIgnore = !overBody(e.clientX, e.clientY);
+    const isOver = overBody(e.clientX, e.clientY);
+    updateHoverState(isOver);
+    const wantIgnore = !isOver;
     if (wantIgnore !== ignoring) {
       ignoring = wantIgnore;
       window.pet.setIgnore(wantIgnore);
+    }
+  });
+  window.addEventListener('mouseleave', () => {
+    if (!dragging) {
+      updateHoverState(false);
     }
   });
 

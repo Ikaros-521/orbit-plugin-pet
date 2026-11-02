@@ -87,13 +87,23 @@ body { display: flex; flex-direction: column; }
   color: #ffab2e;
   font: 13px/24px sans-serif; text-align: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .32);
-  pointer-events: auto; cursor: pointer;
-  opacity: .75;
-  transition: opacity .18s ease, transform .18s ease;
+  pointer-events: none; cursor: pointer;
+  opacity: 0;
+  transform: translateY(-4px) scale(.88);
+  transition: opacity .22s ease, transform .22s cubic-bezier(.2, .9, .3, 1.2);
 }
+
+/* 仅在鼠标悬停在桌宠上方时平滑淡入浮现，平时完全隐藏零遮挡 */
+body.hovered #chatBtn,
+#chatBtn:hover {
+  opacity: .85;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
 #chatBtn:hover {
   opacity: 1;
-  transform: scale(1.12);
+  transform: translateY(0) scale(1.12);
   background: rgba(28, 32, 38, .96);
   border-color: rgba(255, 171, 46, .8);
 }
