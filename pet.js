@@ -528,7 +528,7 @@
 
   bubble.addEventListener('click', hideBubble);
 
-  /* --- todo badge ------------------------------------------------------------- */
+  /* --- todo badge & ai chat button ------------------------------------------- */
 
   const tasksEl = document.getElementById('tasks');
   window.pet.onTasks(({ count } = {}) => {
@@ -541,6 +541,11 @@
   });
   tasksEl.addEventListener('click', () => window.pet.tasksClick());
 
+  const chatBtnEl = document.getElementById('chatBtn');
+  if (chatBtnEl) {
+    chatBtnEl.addEventListener('click', () => window.pet.openChat());
+  }
+
   /* --- click-through -------------------------------------------------------- */
 
   let ignoring = null;
@@ -551,6 +556,7 @@
   function overBody(x, y) {
     if (bubbleVisible && inRect(bubble, x, y)) return true;
     if (!tasksEl.classList.contains('hidden') && inRect(tasksEl, x, y)) return true;
+    if (chatBtnEl && inRect(chatBtnEl, x, y)) return true;
     return y >= marginH;
   }
   window.addEventListener('mousemove', e => {

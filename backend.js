@@ -19,6 +19,7 @@ const { ttsService, PRESET_VOICES, DEFAULT_VOICE_ZH, DEFAULT_VOICE_EN } = requir
 const { apiTtsService, normalizeConfig: normalizeApiConfig } = require('./services/tts-api');
 
 const P = 'desktop-pet:'; // ipc channel namespace for the sprite window
+const CHAT_P = 'desktop-pet-chat:'; // ipc channel namespace for the chat window
 const TOPMOST_TICK_MS = 8000;
 
 let teardown = null; // set by activate; deactivate runs it
@@ -41,6 +42,7 @@ module.exports = {
       apiConfig: null,                     // custom-API engine settings (services/tts-api)
       wfOn: true,          // react to workflow runs with state animations
       tasksOn: true,       // unchecked-todo badge mirrored from memo
+      chatSessionId: null, // associated ai-chat session ID for conversation memory
       lang: null,          // panel fills 'zh' | 'en' from the host UI language
       modelDirs: null,     // Live2D roots to scan; null => [default library]
       x: null,
@@ -503,6 +505,113 @@ module.exports = {
       return petWin;
     }
 
+    /* --- chat companion window ---------------------------------------------- */
+
+    let chatWin = null;
+    let currentChatStreamId = null;
+    let isAiGenerating = false;
+
+    function computeChatPos(width = 360, height = 480) {
+      let petBounds = { x: 100, y: 100, width: 240, height: 240 };
+      if (petWin && !petWin.isDestroyed()) {
+        try { petBounds = petWin.getBounds(); } catch { /* ignore */ }
+      }
+      const pt = { x: Math.round(petBounds.x + petBounds.width / 2), y: Math.round(petBounds.y + petBounds.height / 2) };
+      const d = screen.getDisplayNearestPoint(pt) || screen.getPrimaryDisplay();
+      const wa = d.workArea;
+
+      const gap = 14;
+      let x = petBounds.x + petBounds.width + gap;
+      if (x + width > wa.x + wa.width) {
+        x = petBounds.x - width - gap;
+      }
+      if (x < wa.x) {
+        x = Math.max(wa.x, Math.min(petBounds.x, wa.x + wa.width - width));
+      }
+
+      let y = petBounds.y + petBounds.height - height;
+      if (y < wa.y) y = wa.y + gap;
+      if (y + height > wa.y + wa.height) y = wa.y + wa.height - height - gap;
+
+      return { x: Math.round(x), y: Math.round(y), width, height };
+    }
+
+    function ensureChatWindow() {
+      if (chatWin && !chatWin.isDestroyed()) {
+        if (chatWin.isMinimized()) chatWin.restore();
+        chatWin.show();
+        chatWin.focus();
+        return chatWin;
+      }
+      const bounds = computeChatPos(360, 480);
+      chatWin = ctx.windows.create({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        hasShadow: true,
+        resizable: true,
+        minWidth: 300,
+        minHeight: 380,
+        alwaysOnTop: true,
+        webPreferences: {
+          preload: 'chat-preload.js',
+          backgroundThrottling: false
+        }
+      });
+      chatWin.setAlwaysOnTop(true, 'screen-saver');
+      chatWin.loadURL(ctx.url('chat.html'));
+      chatWin.once('ready-to-show', () => {
+        if (chatWin && !chatWin.isDestroyed()) {
+          chatWin.show();
+          chatWin.focus();
+        }
+      });
+      chatWin.on('closed', () => {
+        chatWin = null;
+      });
+      return chatWin;
+    }
+
+    async function getOrCreateChatSession() {
+      if (typeof ctx.callPlugin !== 'function') {
+        throw new Error('工具箱核心尚未就绪（缺少 callPlugin 跨插件接口）');
+      }
+      let initData = null;
+      try {
+        initData = await ctx.callPlugin('ai-chat', 'getInitData');
+      } catch (err) {
+        throw new Error('AI 助手插件未启用或调用失败: ' + err.message);
+      }
+      const sessions = (initData && Array.isArray(initData.sessions)) ? initData.sessions : [];
+
+      if (prefs.chatSessionId) {
+        const found = sessions.find(s => s.id === prefs.chatSessionId);
+        if (found) return found;
+      }
+
+      const existingPetSess = sessions.find(s => s.title === '桌宠伴侣对话' || s.title === '桌宠对话');
+      if (existingPetSess) {
+        prefs.chatSessionId = existingPetSess.id;
+        savePrefs();
+        return existingPetSess;
+      }
+
+      const created = await ctx.callPlugin('ai-chat', 'createSession', {
+        title: '桌宠伴侣对话',
+        personaId: 'general'
+      });
+      if (created && created.session) {
+        prefs.chatSessionId = created.session.id;
+        savePrefs();
+        return created.session;
+      }
+      throw new Error('无法在 AI 助手建立新会话');
+    }
+
     /* Fullscreen apps and explorer restarts both demote topmost windows; a
        cheap periodic reassert keeps the pet above ordinary windows (it never
        fights real topmost competitors like task manager). Skipped while the
@@ -829,6 +938,11 @@ module.exports = {
       ipcMain.on(ch, fn);
       return () => ipcMain.removeListener(ch, fn);
     };
+    const onChat = (channel, fn) => {
+      const ch = `${CHAT_P}${channel}`;
+      ipcMain.on(ch, fn);
+      return () => ipcMain.removeListener(ch, fn);
+    };
     // zh labels for the Actions submenu; unmapped anim names show raw
     const ANIM_ZH = {
       idle: '待机', walk: '走路', happy: '开心', sleep: '睡觉', click: '点击',
@@ -874,6 +988,9 @@ module.exports = {
       on('tasks-click', () => {
         if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('memo', { view: 'todos' });
       }),
+      on('open-chat', () => {
+        api.openChat();
+      }),
       // movement / drag: clamp into a real display so the pet can't get lost
       on('set-bounds', (_e, b) => {
         if (!b) return;
@@ -896,6 +1013,11 @@ module.exports = {
             }));
         const toggleLabel = (prefs.visible ? '隐藏宠物 / Hide pet' : '显示宠物 / Show pet');
         Menu.buildFromTemplate([
+          {
+            label: '💬 与 AI 助手对话 / Chat with AI',
+            click: () => api.openChat(),
+          },
+          { type: 'separator' },
           { label: '动作 / Actions', submenu: animItems },
           { type: 'separator' },
           {
@@ -916,6 +1038,98 @@ module.exports = {
           { label: toggleLabel, click: () => { api.toggle(); } },
           { label: '宠物设置 / Pet settings', click: () => openHostPanel() },
         ]).popup({ window: petWin });
+      }),
+      // --- Chat companion IPC listeners ---
+      onChat('ready', async e => {
+        try {
+          const sess = await getOrCreateChatSession();
+          e.sender.send(`${CHAT_P}init`, {
+            petName: (pack.cfg.name && (pack.cfg.name[prefs.lang || 'zh'] || pack.cfg.name)) || '小轨',
+            petAvatar: '🪐',
+            messages: (sess && sess.messages) || [],
+            isGenerating: isAiGenerating
+          });
+        } catch (err) {
+          e.sender.send(`${CHAT_P}init`, {
+            petName: '桌宠',
+            petAvatar: '🪐',
+            messages: [{
+              role: 'assistant',
+              content: `未能建立对话：${err.message}\n\n请在「插件中心」确认已启用 **AI 助手** 插件并配置了模型 API Key。`
+            }],
+            isGenerating: false
+          });
+        }
+      }),
+      onChat('send', async (_e, { content } = {}) => {
+        const text = String(content || '').trim();
+        if (!text || isAiGenerating) return;
+        try {
+          const sess = await getOrCreateChatSession();
+          currentChatStreamId = `stream_pet_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+          isAiGenerating = true;
+
+          // 桌宠做出思考动作与小气泡
+          if (pack.engine === 'live2d' || (pack.cfg.anims && pack.cfg.anims.some(a => a.name === 'thinking'))) {
+            send('play', { anim: 'thinking', once: false });
+          }
+          sendQuip('让我想想看…', true);
+
+          await ctx.callPlugin('ai-chat', 'sendMessage', {
+            sessionId: sess.id,
+            content: text,
+            streamId: currentChatStreamId,
+            enableAgent: true
+          });
+        } catch (err) {
+          isAiGenerating = false;
+          if (chatWin && !chatWin.isDestroyed()) {
+            chatWin.webContents.send(`${CHAT_P}chunk`, {
+              streamId: currentChatStreamId,
+              chunk: { type: 'error', error: err.message }
+            });
+          }
+          send('play', { anim: 'error', once: true });
+        }
+      }),
+      onChat('abort', async () => {
+        if (currentChatStreamId && typeof ctx.callPlugin === 'function') {
+          try {
+            await ctx.callPlugin('ai-chat', 'abortStream', { streamId: currentChatStreamId });
+          } catch { /* ignore */ }
+        }
+        isAiGenerating = false;
+        send('play', { anim: 'idle' });
+      }),
+      onChat('new-topic', async () => {
+        try {
+          if (isAiGenerating && currentChatStreamId && typeof ctx.callPlugin === 'function') {
+            await ctx.callPlugin('ai-chat', 'abortStream', { streamId: currentChatStreamId }).catch(() => {});
+          }
+          isAiGenerating = false;
+          const created = await ctx.callPlugin('ai-chat', 'createSession', {
+            title: '桌宠伴侣对话',
+            personaId: 'general'
+          });
+          if (created && created.session) {
+            prefs.chatSessionId = created.session.id;
+            savePrefs();
+            if (chatWin && !chatWin.isDestroyed()) {
+              chatWin.webContents.send(`${CHAT_P}messages`, { messages: [] });
+            }
+          }
+        } catch (err) {
+          console.warn('[desktop-pet] new topic error:', err.message);
+        }
+      }),
+      onChat('close', () => {
+        if (chatWin && !chatWin.isDestroyed()) chatWin.hide();
+      }),
+      onChat('minimize', () => {
+        if (chatWin && !chatWin.isDestroyed()) chatWin.minimize();
+      }),
+      onChat('open-ai-settings', () => {
+        if (typeof ctx.openPluginPanel === 'function') ctx.openPluginPanel('ai-chat');
       }),
     ];
 
@@ -1111,6 +1325,10 @@ module.exports = {
         else applyBounds(pos.x, pos.y, width, height);
         return { ok: true, x: pos.x, y: pos.y };
       },
+      openChat: () => {
+        ensureChatWindow();
+        return { ok: true };
+      },
     };
 
     /* Route table goes on a pseudo-ctx under the service name DSH companions
@@ -1167,6 +1385,37 @@ module.exports = {
       });
     }
 
+    let unsubAiChat = null;
+    if (typeof ctx.onPluginEvent === 'function') {
+      unsubAiChat = ctx.onPluginEvent('ai-chat', ({ channel, payload }) => {
+        if (channel === 'stream-chunk' && payload) {
+          if (payload.streamId && payload.streamId === currentChatStreamId) {
+            if (chatWin && !chatWin.isDestroyed()) {
+              chatWin.webContents.send(`${CHAT_P}chunk`, payload);
+            }
+            const chunk = payload.chunk || {};
+            if (chunk.type === 'error') {
+              isAiGenerating = false;
+              send('play', { anim: 'error', once: true });
+            } else if (chunk.type === 'done' || chunk.type === 'complete') {
+              isAiGenerating = false;
+              // 动作庆祝/欢呼
+              send('play', { anim: 'celebrate', once: true });
+              // 提取回答第一句话给桌宠气泡
+              const finalMsg = (chunk.message && chunk.message.content) ? chunk.message.content : '';
+              if (finalMsg) {
+                const firstSentence = finalMsg.split(/[。！？\n]/)[0].trim();
+                const brief = firstSentence.length > 36 ? firstSentence.slice(0, 36) + '…' : firstSentence;
+                reactBubble(brief || '回答好啦！');
+              } else {
+                reactBubble('回答好啦！');
+              }
+            }
+          }
+        }
+      });
+    }
+
     /* --- lifecycle ------------------------------------------------------------ */
 
     const onDisplayChange = () => {
@@ -1198,11 +1447,13 @@ module.exports = {
       clearInterval(topmostTimer);
       if (unsubWf) { try { unsubWf(); } catch { /* core already gone */ } }
       if (unsubMemo) { try { unsubMemo(); } catch { /* core already gone */ } }
+      if (unsubAiChat) { try { unsubAiChat(); } catch { /* core already gone */ } }
       screen.removeListener('display-metrics-changed', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);
       for (const off of offs) off();
       pctx.dispose();
       // window itself is destroyed by the plugin manager's windows teardown
+      if (chatWin && !chatWin.isDestroyed()) { try { chatWin.destroy(); } catch { /* ignore */ } chatWin = null; }
       petWin = null;
     };
   },

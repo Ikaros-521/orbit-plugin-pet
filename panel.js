@@ -172,6 +172,9 @@
               <span class="dpet-hint">${t('镜向备忘录未勾任务，点头条开备忘', 'Mirrors open memo tasks; click the badge to open Memo')}</span>
             </label>
             <div class="dpet-row">
+              <button type="button" class="dpet-chat-btn btn small" style="background:var(--amber);color:#1a150e;font-weight:600">💬 ${t('与 AI 助手对话', 'Chat with AI')}</button>
+            </div>
+            <div class="dpet-row">
               <button type="button" class="dpet-quip btn ghost small">${t('说一句', 'Say something')}</button>
               <span class="dpet-quip-result"></span>
             </div>
@@ -192,6 +195,7 @@
         art: $('.dpet-hero-art'), name: $('.dpet-hero-name'), status: $('.dpet-hero-status'),
         toggle: $('.dpet-toggle'), size: $('.dpet-size'), sizeVal: $('.dpet-size-val'),
         pack: $('.dpet-pack'), walk: $('.dpet-walk'), reset: $('.dpet-reset'),
+        chatBtn: $('.dpet-chat-btn'),
         library: $('.dpet-library'), dirs: $('.dpet-dirs'), libOpen: $('.dpet-lib-open'), libAdd: $('.dpet-lib-add'), libRescan: $('.dpet-lib-rescan'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
         tasks: $('.dpet-tasks'),
@@ -583,6 +587,7 @@
         const d = res && res.ok ? res.data : { ok: false, error: res && res.error };
         els.quipResult.textContent = d.ok ? `“${d.text}”` : `⚠ ${d.error || ''}`;
       });
+      if (els.chatBtn) els.chatBtn.addEventListener('click', () => { call('openChat'); });
       els.reset.addEventListener('click', () => { call('resetPosition'); });
       els.reset.textContent = LABELS.resetPos();
 

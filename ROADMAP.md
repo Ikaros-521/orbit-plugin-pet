@@ -18,7 +18,7 @@ dsh-pet 锚定 DSH 会话，我们的联动对象换成工具箱自己的状态�
 - [x] 占场锁：dsh-pet 同款契约——acquire/renew/ttl、外部 play/broadcast 必须带 lockId、自播（idle/walk/碎碎念）让路、**用户一碰宠物立即撤锁**
 - [x] playbackId 播放回执：pending → playing → done | failed，点播方可 await（`playback` API）
 - [x] 事件面配套（core）：WorkflowManager 进程内订阅总线 + run/auto 双路 run-start/run-finish 里程碑（`auto-run` 镜像语义不变）
-- [ ] ai-chat 会话联动：生成中→thinking、工具调用→busy、完成→success+气泡摘要（需 ai-chat 暴露事件/状态面，避开并行热区单独立项）
+- [x] ai-chat 会话联动：生成中→thinking、工具调用→busy、完成→success+气泡摘要（多轮上下文对话框已上线）
 - [ ] 系统通知：workflow 完成 → 通知点击跳回工具箱（open-plugin 路由已有，待接）
 - [ ] AI 碎碎念接 ai-chat provider
 

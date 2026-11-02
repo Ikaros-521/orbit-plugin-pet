@@ -77,6 +77,27 @@ body { display: flex; flex-direction: column; }
 }
 #tasks.hidden { display: none; }
 
+/* --- ai chat quick button (opens companion chat dialog) --------------------- */
+#chatBtn {
+  position: absolute; left: 10px; top: 8px;
+  width: 24px; height: 24px;
+  border-radius: 12px;
+  background: rgba(28, 32, 38, .85);
+  border: 1px solid rgba(255, 171, 46, .4);
+  color: #ffab2e;
+  font: 13px/24px sans-serif; text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .32);
+  pointer-events: auto; cursor: pointer;
+  opacity: .75;
+  transition: opacity .18s ease, transform .18s ease;
+}
+#chatBtn:hover {
+  opacity: 1;
+  transform: scale(1.12);
+  background: rgba(28, 32, 38, .96);
+  border-color: rgba(255, 171, 46, .8);
+}
+
 /* --- slingshot band (drawn while pulling after a double-click) ---------------- */
 #sling {
   position: absolute; left: 0; top: 0;

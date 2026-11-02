@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('pet', {
   setBounds: b => ipcRenderer.send(`${P}set-bounds`, b),
   setIgnore: ignore => ipcRenderer.send(`${P}set-ignore`, { ignore }),
   contextMenu: () => ipcRenderer.send(`${P}context-menu`),
+  openChat: () => ipcRenderer.send(`${P}open-chat`),
   touch: () => ipcRenderer.send(`${P}touch`),
   tasksClick: () => ipcRenderer.send(`${P}tasks-click`),
   reportPlayback: (id, status) => ipcRenderer.send(`${P}playback-report`, { id, status }),
