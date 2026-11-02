@@ -257,8 +257,9 @@ html, body {
   font-size: 12px;
   padding: 2px 5px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #ffc266;
 }
 
 .msg-bubble pre {
@@ -280,11 +281,12 @@ html, body {
   padding: 0;
 }
 
-/* Reasoning block */
+/* Reasoning block (DeepSeek / CoT style with high contrast) */
 .reasoning-card {
   margin-bottom: 8px;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(14, 17, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 3px solid var(--amber);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
@@ -293,20 +295,23 @@ html, body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  font-size: 11px;
-  color: var(--ink-muted);
+  padding: 6px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--amber);
   cursor: pointer;
   user-select: none;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 171, 46, 0.09);
+  transition: background 0.15s ease, filter 0.15s ease;
 }
 
 .reasoning-header:hover {
-  color: var(--ink-secondary);
+  background: rgba(255, 171, 46, 0.16);
 }
 
 .reasoning-header svg {
   transition: transform 0.2s ease;
+  stroke: var(--amber);
 }
 
 .reasoning-card.collapsed .reasoning-header svg {
@@ -314,15 +319,25 @@ html, body {
 }
 
 .reasoning-body {
-  padding: 7px 9px;
+  padding: 8px 11px;
   font-size: 12px;
-  color: var(--ink-secondary);
-  line-height: 1.45;
-  font-style: italic;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-  max-height: 180px;
+  color: #dbe2ea !important; /* 清晰明亮的高对比度浅灰白，彻底告别看不见的问题 */
+  line-height: 1.55;
+  font-style: normal; /* 移除 italic，杜绝中文字体发虚发暗 */
+  background: rgba(8, 10, 14, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  max-height: 200px;
   overflow-y: auto;
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.reasoning-body::-webkit-scrollbar {
+  width: 4px;
+}
+.reasoning-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
 }
 
 .reasoning-card.collapsed .reasoning-body {
