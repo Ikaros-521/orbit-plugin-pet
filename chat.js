@@ -192,6 +192,66 @@
     scrollToBottom();
   }
 
+  /* --- tool approval cards ----------------------------------------------------- */
+
+  /* ai-chat's agent mode asks before running tools (default 'ask'). Without
+     an answer here the stream parks on a pending approval forever — this card
+     IS the answer surface for the pet chat. */
+  function argsPreview(raw) {
+    let s = String(raw || '').trim();
+    try {
+      const obj = JSON.parse(s);
+      s = JSON.stringify(obj);
+    } catch { /* template string args — show raw */ }
+    if (s.length > 160) s = s.slice(0, 160) + '…';
+    return s || '(无参数)';
+  }
+
+  function showApprovalCard(chunk) {
+    if (!activeAssistantEl) createStreamingAssistantMessage();
+    // one card per toolId: a replayed chunk must not duplicate the ask
+    if (activeAssistantEl.bubble.querySelector(`.approval-card[data-approval="${chunk.toolId}"]`)) return;
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    card.dataset.approval = chunk.toolId;
+    card.innerHTML = `
+      <div class="approval-head"><span class="approval-icon">🛠</span><span>请求使用工具</span></div>
+      <div class="approval-tool-name">${escapeHtml(chunk.toolName || 'tool')}</div>
+      <pre class="approval-args">${escapeHtml(argsPreview(chunk.args))}</pre>
+      <div class="approval-actions">
+        <button type="button" class="approval-btn allow">允许</button>
+        <button type="button" class="approval-btn always">总是允许</button>
+        <button type="button" class="approval-btn deny">拒绝</button>
+      </div>`;
+    card.querySelectorAll('.approval-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const approved = !btn.classList.contains('deny');
+        const alwaysAllow = btn.classList.contains('always');
+        card.querySelectorAll('.approval-btn').forEach(b => { b.disabled = true; });
+        card.classList.add('resolved');
+        window.petChat.resolveApproval(chunk.toolId, approved, alwaysAllow);
+        const status = card.querySelector('.approval-actions');
+        if (status) status.innerHTML = approved
+          ? `<span class="approval-status ok">✓ 已${alwaysAllow ? '总是' : ''}允许，正在执行…</span>`
+          : `<span class="approval-status denied">✗ 已拒绝该工具调用</span>`;
+        scrollToBottom(true);
+      });
+    });
+    activeAssistantEl.bubble.appendChild(card);
+    scrollToBottom(true);
+  }
+
+  function markApprovalResult(chunk) {
+    // the answer may also land from elsewhere (ai-chat panel answering first)
+    const card = document.querySelector(`.approval-card[data-approval="${chunk.toolId}"]`);
+    if (!card || card.classList.contains('resolved')) return;
+    card.classList.add('resolved');
+    const actions = card.querySelector('.approval-actions');
+    if (actions) actions.innerHTML = chunk.approved
+      ? `<span class="approval-status ok">✓ 已允许，正在执行…</span>`
+      : `<span class="approval-status denied">✗ 已拒绝该工具调用</span>`;
+  }
+
   function finalizeStreaming(error) {
     setGeneratingState(false);
     if (!activeAssistantEl) return;
@@ -311,6 +371,10 @@
       updateStreamingReasoning(chunk.delta, chunk.reasoning);
     } else if (chunk.type === 'tool_exec_start') {
       updateStreamingContent(`\n*正在调用工具…*\n`);
+    } else if (chunk.type === 'tool_approval_request') {
+      showApprovalCard(chunk);
+    } else if (chunk.type === 'tool_approval_result') {
+      markApprovalResult(chunk);
     } else if (chunk.type === 'error') {
       finalizeStreaming(chunk.error || '请求出错');
     } else if (chunk.type === 'aborted') {

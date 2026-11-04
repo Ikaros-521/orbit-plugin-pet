@@ -167,6 +167,16 @@
               <span class="dpet-hint">${t('运行时打工、成功庆祝、失败难过', 'Working / celebrate / error on workflow runs')}</span>
             </label>
             <label class="dpet-row dpet-check">
+              <input class="dpet-notify" type="checkbox" />
+              <span class="dpet-row-label">${t('工作流通知', 'Workflow notifications')}</span>
+              <span class="dpet-hint">${t('失败必提醒，成功仅后台时提醒；点击通知跳回工作流页', 'Failures always toast, successes only in background; click jumps to the workflow')}</span>
+            </label>
+            <label class="dpet-row dpet-check">
+              <input class="dpet-aiquip" type="checkbox" />
+              <span class="dpet-row-label">${t('AI 碎碎念', 'AI chatter')}</span>
+              <span class="dpet-hint">${t('部分台词由 AI 助手的模型生成（少量 token 消耗），失败自动回退本地', 'Some lines come from the AI assistant model (small token cost); falls back to the local pool on failure')}</span>
+            </label>
+            <label class="dpet-row dpet-check">
               <input class="dpet-tasks" type="checkbox" />
               <span class="dpet-row-label">${t('待办挂牌', 'Todo badge')}</span>
               <span class="dpet-hint">${t('镜向备忘录未勾任务，点头条开备忘', 'Mirrors open memo tasks; click the badge to open Memo')}</span>
@@ -198,6 +208,7 @@
         chatBtn: $('.dpet-chat-btn'),
         library: $('.dpet-library'), dirs: $('.dpet-dirs'), libOpen: $('.dpet-lib-open'), libAdd: $('.dpet-lib-add'), libRescan: $('.dpet-lib-rescan'),
         bubble: $('.dpet-bubble'), voice: $('.dpet-voice'), wf: $('.dpet-wf'),
+        notify: $('.dpet-notify'), aiquip: $('.dpet-aiquip'),
         tasks: $('.dpet-tasks'),
         voiceOpts: $('.dpet-voice-opts'), voiceEngine: $('.dpet-voice-engine'),
         systemHint: $('.dpet-system-hint'),
@@ -297,6 +308,8 @@
         els.bubble.checked = !!prefs.bubbleOn;
         els.voice.checked = !!prefs.voiceOn;
         els.wf.checked = prefs.wfOn !== false;
+        els.notify.checked = prefs.notifyOn !== false;
+        els.aiquip.checked = !!prefs.aiQuipOn;
         els.tasks.checked = prefs.tasksOn !== false;
 
         els.voiceOpts.style.display = prefs.voiceOn ? 'flex' : 'none';
@@ -581,6 +594,8 @@
         }
       });
       els.wf.addEventListener('change', () => { call('setPrefs', { wfOn: els.wf.checked }); });
+      els.notify.addEventListener('change', () => { call('setPrefs', { notifyOn: els.notify.checked }); });
+      els.aiquip.addEventListener('change', () => { call('setPrefs', { aiQuipOn: els.aiquip.checked }); });
       els.tasks.addEventListener('change', () => { call('setPrefs', { tasksOn: els.tasks.checked }); });
       els.quip.addEventListener('click', async () => {
         const res = await call('quip');

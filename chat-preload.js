@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('petChat', {
   send: (content) => ipcRenderer.send(`${P}send`, { content }),
   abort: () => ipcRenderer.send(`${P}abort`),
   newTopic: () => ipcRenderer.send(`${P}new-topic`),
+  resolveApproval: (toolCallId, approved, alwaysAllow) =>
+    ipcRenderer.send(`${P}resolve-approval`, { toolCallId, approved, alwaysAllow }),
   close: () => ipcRenderer.send(`${P}close`),
   minimize: () => ipcRenderer.send(`${P}minimize`),
   openAiSettings: () => ipcRenderer.send(`${P}open-ai-settings`),

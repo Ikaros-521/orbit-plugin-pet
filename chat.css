@@ -470,3 +470,113 @@ html, body {
 .hidden {
   display: none !important;
 }
+
+/* --- tool approval card (agent 'ask' mode) ---------------------------------- */
+
+.approval-card {
+  margin: 8px 0 4px 0;
+  border-radius: var(--radius-sm);
+  background: rgba(14, 18, 26, 0.75);
+  border: 1px solid rgba(74, 158, 255, 0.35);
+  padding: 8px 10px;
+  font-size: 11.5px;
+}
+
+.approval-card.resolved {
+  border-color: var(--border-subtle);
+  opacity: 0.85;
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+.approval-tool-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--blue);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.approval-args {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  margin: 0 0 8px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.approval-btn {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--ink-primary);
+  border-radius: 12px;
+  padding: 3px 12px;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.approval-btn:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.approval-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.approval-btn.allow,
+.approval-btn.always {
+  border-color: rgba(63, 185, 80, 0.45);
+  color: var(--green);
+}
+
+.approval-btn.allow:hover:not(:disabled),
+.approval-btn.always:hover:not(:disabled) {
+  background: rgba(63, 185, 80, 0.12);
+}
+
+.approval-btn.deny {
+  border-color: rgba(248, 81, 73, 0.45);
+  color: #f85149;
+}
+
+.approval-btn.deny:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.approval-status {
+  font-size: 11.5px;
+}
+
+.approval-status.ok {
+  color: var(--green);
+}
+
+.approval-status.denied {
+  color: #f85149;
+}

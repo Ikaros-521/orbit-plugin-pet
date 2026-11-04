@@ -24,7 +24,10 @@
 - **投喂文件**：把文件拖到桌宠身上——`.json` 进 JSON 编辑器、`.md/.txt/.log/.csv/.svg` 进备忘录、图片进编码实验室自动预览；不认识的类型它会摇头拒绝
 - **待办挂牌**：备忘录里有未勾的任务（`- [ ]`）时头顶亮红角标，点角标直达备忘录；攒得多了它还会开口催
 - **右键**：动作菜单 / 说一句 / 回默认位置（弹簧滑翔）/ 隐藏 / 设置
-- **设置面板**：大小（120–480px）、宠物包切换、自动溜达、气泡/语音/工作流联动/待办角标开关、回默认位
+- **与 AI 伴侣聊天**：点宠物头顶气泡按钮（悬停浮现）或右键「与 AI 助手对话」——多轮会话记忆存在 AI 助手里；Agent 调工具时会弹**审批卡片**（允许 / 总是允许 / 拒绝），窗口尺寸位置会被记住
+- **AI 碎碎念**（默认关，面板可开）：部分台词由 AI 助手已配模型按情境生成（时段 / 待办 / 最近工作流结果），约每 3 次碎碎念 1 次、至多 10 分钟一条，失败自动回退本地语料
+- **工作流通知**：跑完的工作流弹系统通知——失败必弹，成功仅当工具箱在后台时弹；**点击通知直达该工作流页面**
+- **设置面板**：大小（120–480px）、宠物包切换、自动溜达、气泡/语音/工作流联动/工作流通知/AI 碎碎念/待办角标开关、回默认位
 - 空闲时自己会沿屏幕底边散步，走累了自己回 idle；跑工作流时它会打工、庆祝、难过
 
 ## Live2D 宠物（可选引擎）：丢进去就能用
@@ -93,6 +96,12 @@ pets/<pack-id>/
 # 冒烟测试（需相邻目录有 orbit-tools 仓库与其 node_modules）
 E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/smoke.js
 
+# 聊天链路集成测试（审批卡片 / 生成门 / aborted 复位，需 ai-chat 插件）
+E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/test-ai-chat-integration.js
+
+# 语音队列回归（真实网络合成，渲染端排队播放）
+E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/test-voice-queue.js
+
 # 面板截图（浅/深主题）
 E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/panel-shot.js
 E:/Github_Pro/orbit-tools/node_modules/.bin/electron tools/panel-shot.js --dark
@@ -121,7 +130,8 @@ tools/               # 素材生成 / 冒烟 / 面板截图 / live2d 渲染 spik
 
 - [x] 碎碎念气泡 + 语音朗读（本地语料 + speechSynthesis，v0.2）
 - [x] 工作状态联动（workflows 执行 → working/celebrate/error + 气泡播报，v0.3）
-- [ ] ai-chat 会话联动 / AI 碎碎念（需要 ai-chat 暴露事件与 provider 面）
+- [x] ai-chat 会话联动 + AI 碎碎念（chatComplete 生成，v0.9）
+- [x] 工作流完成系统通知，点击跳回工作流页（v0.9）
 - [ ] 多宠同屏 + 碰撞
 - [ ] 宠物包导入 UI（选文件夹装填）
 

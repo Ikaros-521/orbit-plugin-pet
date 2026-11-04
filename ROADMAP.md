@@ -19,8 +19,8 @@ dsh-pet 锚定 DSH 会话，我们的联动对象换成工具箱自己的状态�
 - [x] playbackId 播放回执：pending → playing → done | failed，点播方可 await（`playback` API）
 - [x] 事件面配套（core）：WorkflowManager 进程内订阅总线 + run/auto 双路 run-start/run-finish 里程碑（`auto-run` 镜像语义不变）
 - [x] ai-chat 会话联动：生成中→thinking、工具调用→busy、完成→success+气泡摘要（多轮上下文对话框已上线）
-- [ ] 系统通知：workflow 完成 → 通知点击跳回工具箱（open-plugin 路由已有，待接）
-- [ ] AI 碎碎念接 ai-chat provider
+- [x] 系统通知：workflow 完成 → 系统通知（失败必弹；成功仅工具箱后台时），点击跳回工作流页
+- [x] AI 碎碎念接 ai-chat provider（chatComplete 一次性生成，默认关，约 1/3 概率、10 分钟至多一条，失败回退本地语料）
 
 ## Phase 3 · v0.4 「有手脚」——交互深化
 

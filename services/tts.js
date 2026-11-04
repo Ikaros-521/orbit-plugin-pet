@@ -330,7 +330,25 @@ class EdgeTTSService {
         segments: [{ text: res.text, audioUrl: res.audioUrl, duration: res.duration }],
       };
     }
-    const results = await Promise.all(segments.map(text => this.synthesize({ ...params, text })));
+    // Bounded concurrency: firing every segment's websocket at once is exactly
+    // how a long speech trips 429s. Three at a time stays near-parallel in
+    // latency while keeping the rate limiter calm.
+    const results = new Array(segments.length);
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= segments.length) return;
+        results[i] = await this.synthesize({ ...params, text: segments[i] });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, segments.length) }, worker));
+    // One calm sequential retry pass for whatever failed under load (each
+    // synthesize already retries transient errors once by itself).
+    const retryIdx = results.map((r, i) => (!r || !r.ok ? i : -1)).filter(i => i >= 0);
+    for (const i of retryIdx) {
+      results[i] = await this.synthesize({ ...params, text: segments[i] });
+    }
     const failed = results.find(r => !r || !r.ok);
     if (failed) {
       return {

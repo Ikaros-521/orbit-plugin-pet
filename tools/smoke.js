@@ -122,6 +122,9 @@ app.whenReady().then(async () => {
   ok('bubbleOn gate respected');
 
   /* --- workflow reactions --------------------------------------------------- */
+  /* the smart-finish OS toast is real on Windows — keep the test run silent
+     (the notifyWorkflowFinish code path itself is guarded + try/caught) */
+  await manager.call('desktop-pet', 'setPrefs', { notifyOn: false });
   wfEmit({ event: 'run-start', name: '冒烟流', trigger: 'manual' });
   let sW = null;
   for (let i = 0; i < 20; i++) {
@@ -289,15 +292,30 @@ app.whenReady().then(async () => {
 
   /* --- todo badge mirrored from memo ------------------------------------------------ */
   if (!manager.activate('memo')) fail('memo backend needed for todo-badge test');
+  /* The badge mirrors memo's DEDICATED open todos (stats.openTodos — the same
+     number memo's own 待办 badge shows). Note-embedded checkbox tasks
+     intentionally do NOT count: shipping them read as phantom todos. */
+  const baseList = await manager.call('memo', 'list');
+  const baseStats = baseList && baseList.stats;
+  if (!baseStats || !Number.isFinite(baseStats.openTodos)) fail('memo list has no stats.openTodos: ' + JSON.stringify(baseStats));
   await manager.call('memo', 'create', { content: '- [ ] 任务甲\n- [ ] 任务乙\n- [x] 任务丙' });
   await manager.call('desktop-pet', 'setPrefs', { tasksOn: true });
+  const memoList = await manager.call('memo', 'list');
+  const mStats = memoList && memoList.stats;
+  if (mStats.noteTasksOpen !== baseStats.noteTasksOpen + 2) {
+    fail('note checkbox counting changed, revisit badge semantics: ' + JSON.stringify({ base: baseStats, now: mStats }));
+  }
+  if (mStats.openTodos !== baseStats.openTodos) {
+    fail('note checkboxes leaked into openTodos — badge semantics changed: ' + JSON.stringify(mStats));
+  }
+  const wantBadge = mStats.openTodos;
   let stT = null;
-  for (let i = 0; i < 12 && !(stT && stT.tasks >= 3); i++) {
+  for (let i = 0; i < 12 && !(stT && stT.tasks === wantBadge); i++) {
     await sleep(300);
     stT = await manager.call('desktop-pet', 'getState');
   }
-  if (!stT || stT.tasks < 3) fail('todo badge should mirror memo open tasks: ' + JSON.stringify(stT && stT.tasks));
-  ok(`todo badge mirrors memo (${stT.tasks} open tasks incl. the seeded note)`);
+  if (!stT || stT.tasks !== wantBadge) fail(`todo badge should mirror memo openTodos=${wantBadge}: ` + JSON.stringify(stT && stT.tasks));
+  ok(`todo badge mirrors memo's dedicated open todos (${stT.tasks}); note checkboxes stay excluded`);
 
   /* --- memo companion: todo-done celebration & reminder wakeup --------------- */
   const todoRes = await manager.call('memo', 'todoCreate', { title: '给桌宠买小鱼干' });

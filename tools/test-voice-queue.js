@@ -77,7 +77,17 @@ app.whenReady().then(async () => {
   await sleep(500); // let the stub engine boot
 
   const log = () => win.webContents.executeJavaScript('window.__voiceLog.slice()');
-  const synth = async text => ttsService.synthesize({ text, voice: 'zh-CN-XiaoyiNeural' });
+  /* Real network synthesis: a transient 429 here once produced a seg with no
+     audioUrl (silently filtered by the renderer) and read as a playback bug.
+     Retry a failed synthesis so the scenarios test playback, not the network. */
+  const synth = async text => {
+    const r = await ttsService.synthesize({ text, voice: 'zh-CN-XiaoyiNeural' });
+    if (r && r.ok && r.audioUrl) return r;
+    await new Promise(res => setTimeout(res, 600));
+    const r2 = await ttsService.synthesize({ text, voice: 'zh-CN-XiaoyiNeural' });
+    if (!r2 || !r2.ok || !r2.audioUrl) throw new Error('synthesis failed twice: ' + JSON.stringify(r2 && r2.error));
+    return r2;
+  };
   // mp3 tails are identical silence padding across segments — tag each url
   // with a fragment so the probe can tell segments apart (fragments don't
   // affect media loading)
